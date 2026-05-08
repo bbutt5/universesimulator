@@ -1,16 +1,26 @@
 simulation:
   injection_rate: 100          # particles injected per real second
-  injection_radius_initial: 5.0    # starting radius — near zero, like the Big Bang (SU)
+  injection_radius_initial: 5.0    # starting radius (SU) — near zero, like the Big Bang
   injection_radius_expansion: 40.0 # how fast the injection zone grows (SU per sim-second)
   injection_velocity_max: 8.0  # max random initial speed (SU/s)
   time_step: 0.02              # simulation seconds per physics step
   steps_per_frame: 1           # physics steps per render frame
-  max_particles: 1000          # smooth at 1000 on most hardware; see physics.py comments for numba upgrade
+  max_particles: 1000          # smooth at 1000 on most hardware; see physics.py for numba upgrade
 
 physics:
   gravity_constant: 8000.0     # scaled G; real G=6.674e-11 N·m²/kg², amplified for visibility
   softening_length: 40.0       # prevents force singularity at r→0 (SU)
   max_velocity: 2000.0         # velocity cap to prevent numerical blow-up (SU/s)
+
+thermal:
+  # --------------------------------------------------------------------------
+  # Short-range repulsive pressure between hot, close particles.
+  # Mimics ideal-gas pressure and creates hydrostatic equilibrium in dense
+  # regions — the key ingredient that lets stars stabilise instead of collapsing
+  # to a point.  Higher pressure_constant = stiffer gas = larger stable stars.
+  # --------------------------------------------------------------------------
+  pressure_constant: 0.4       # k_p: repulsion strength (scales with relative KE)
+  pressure_cutoff: 200.0       # neighbourhood radius for pressure interactions (SU)
 
 chemistry:
   bond_formation_factor: 1.4   # form bond when dist < factor * (rc_i + rc_j)
@@ -20,6 +30,22 @@ chemistry:
   bond_break_factor: 2.8       # break bond when dist > factor * equilibrium_length
   fusion_ke_threshold: 4000.0  # relative KE (½μv²) required for nuclear fusion
   fusion_enabled: true
+
+  # Radiation pressure feedback from each fusion event.
+  # Each fusion emits an outward velocity kick to nearby particles, falling off
+  # as 1/r.  This is the stellar thermostat: more fusion → more radiation →
+  # surrounding gas heats up → thermal pressure rises → expansion → less fusion.
+  radiation_radius: 600.0      # how far the kick reaches (SU)
+  radiation_energy_scale: 150.0  # kick magnitude at 1 SU distance (SU²/s)
+
+accretion:
+  # --------------------------------------------------------------------------
+  # Gravitational accretion: two non-fusable particles that are gravitationally
+  # bound (relative KE < mutual gravitational PE) merge into one body, conserving
+  # momentum.  Rocky elements (C, O, Si, Fe …) accrete into planetesimals and
+  # planets; fusable elements (H, He) fuse via nuclear reactions instead.
+  # --------------------------------------------------------------------------
+  accretion_radius: 100.0      # max separation for a merge to occur (SU)
 
 cosmology:
   # --------------------------------------------------------------------------
@@ -41,7 +67,6 @@ cosmology:
   n_density_seeds: 8
 
   # How much denser the seed regions are vs the background.
-  # Higher = stronger perturbations = faster structure formation.
   perturbation_amplitude: 5.0
 
   # Size of each seed region as a fraction of the current injection radius.
@@ -76,3 +101,10 @@ renderer:
   camera_distance: 3000.0
   fov: 60.0
   show_hud: true               # show stats overlay (particle count, bonds, etc.)
+
+  # Body rendering — appearance is driven purely by accumulated mass ratio.
+  # No hardcoded "this is a star" flag: if mass / element_mass >= threshold,
+  # the colour and size automatically switch to the planet or star palette.
+  planet_mass_threshold: 20.0  # mass_ratio above which a particle renders as a planet
+  star_mass_threshold: 200.0   # mass_ratio above which a particle renders as a star
+  body_size_scale: 3.0         # size = body_size_scale × cbrt(mass_ratio)  (px)

@@ -172,3 +172,67 @@ class TestFusion:
         chemistry._fuse(w)
 
         assert w.n == 2   # C has can_fuse=False
+
+
+class TestRadiationKick:
+    def test_fusion_kicks_nearby_observer_outward(self, cfg):
+        """A particle near a fusion site should receive an outward velocity kick."""
+        cfg.chemistry.fusion_ke_threshold = 1.0
+        w = World(cfg)
+
+        r_eq   = ELEMENTS['H'].covalent_radius * 2
+        speed  = 5000.0
+        # Two H atoms that will fuse
+        _place(w, 'H', [0.0, 0.0, 0.0],       vel=[ speed, 0.0, 0.0])
+        _place(w, 'H', [r_eq * 1.5, 0.0, 0.0], vel=[-speed, 0.0, 0.0])
+        # Observer sitting to the right, within radiation_radius
+        observer_x = 200.0
+        _place(w, 'C', [observer_x, 0.0, 0.0], vel=[0.0, 0.0, 0.0])
+
+        v_before = w.velocities[2, 0]   # C is index 2
+        chemistry._fuse(w)
+
+        # After fusion n drops to 2 (H+H→D, C stays)
+        # Find the C particle (the one with larger mass relative to element)
+        assert w.n == 2
+        # The surviving non-D particle should have been kicked outward (+x)
+        from sim.elements import ELEMENTS_LIST
+        c_idx = next(i for i in range(w.n) if ELEMENTS_LIST[w.elem_ids[i]].symbol == 'C')
+        assert w.velocities[c_idx, 0] > v_before
+
+    def test_observer_beyond_radius_not_kicked(self, cfg):
+        """A particle beyond radiation_radius should not be affected."""
+        cfg.chemistry.fusion_ke_threshold = 1.0
+        cfg.chemistry.radiation_radius    = 100.0   # small radius
+        w = World(cfg)
+
+        r_eq  = ELEMENTS['H'].covalent_radius * 2
+        speed = 5000.0
+        _place(w, 'H', [0.0, 0.0, 0.0],        vel=[ speed, 0.0, 0.0])
+        _place(w, 'H', [r_eq * 1.5, 0.0, 0.0], vel=[-speed, 0.0, 0.0])
+        # Observer far outside radiation_radius
+        _place(w, 'C', [500.0, 0.0, 0.0], vel=[0.0, 0.0, 0.0])
+
+        chemistry._fuse(w)
+
+        from sim.elements import ELEMENTS_LIST
+        c_idx = next(i for i in range(w.n) if ELEMENTS_LIST[w.elem_ids[i]].symbol == 'C')
+        np.testing.assert_allclose(w.velocities[c_idx], [0.0, 0.0, 0.0], atol=1e-10)
+
+    def test_kick_disabled_when_scale_zero(self, cfg):
+        """Setting radiation_energy_scale=0 should produce no kick."""
+        cfg.chemistry.fusion_ke_threshold   = 1.0
+        cfg.chemistry.radiation_energy_scale = 0.0
+        w = World(cfg)
+
+        r_eq  = ELEMENTS['H'].covalent_radius * 2
+        speed = 5000.0
+        _place(w, 'H', [0.0, 0.0, 0.0],        vel=[ speed, 0.0, 0.0])
+        _place(w, 'H', [r_eq * 1.5, 0.0, 0.0], vel=[-speed, 0.0, 0.0])
+        _place(w, 'C', [200.0, 0.0, 0.0], vel=[0.0, 0.0, 0.0])
+
+        chemistry._fuse(w)
+
+        from sim.elements import ELEMENTS_LIST
+        c_idx = next(i for i in range(w.n) if ELEMENTS_LIST[w.elem_ids[i]].symbol == 'C')
+        np.testing.assert_allclose(w.velocities[c_idx], [0.0, 0.0, 0.0], atol=1e-10)

@@ -2,6 +2,10 @@
 3D real-time renderer using vispy.
 
 Particles are drawn as colour-coded spherical markers (CPK colours).
+Accreted bodies are rendered by mass: planets as rocky grey, stars as warm
+yellow-white — determined entirely by the accumulated mass ratio vs the
+base element mass (no hardcoded "this is a star" flag).
+
 Covalent bonds are drawn as line segments.
 A minimal HUD in the window title shows live stats.
 
@@ -27,11 +31,15 @@ from vispy.scene import visuals
 from sim.elements import ELEMENTS_LIST
 from sim.world import World
 
-_FPS_TARGET  = 60       # target frame rate
-_FPS_WINDOW  = 0.5      # smoothing window for FPS measurement (seconds)
-_SPEED_UP    = 2.0      # speed multiplier per keypress
-_SPEED_MAX   = 64.0     # maximum sim speed
-_SPEED_MIN   = 0.0625   # minimum sim speed (1/16×)
+_FPS_TARGET = 60
+_FPS_WINDOW = 0.5     # smoothing window for FPS measurement (seconds)
+_SPEED_UP   = 2.0     # speed multiplier per keypress
+_SPEED_MAX  = 64.0
+_SPEED_MIN  = 0.0625  # 1/16×
+
+# CPK colours for rendering classification
+_COLOUR_PLANET = np.array([0.55, 0.50, 0.42], dtype=np.float32)   # rocky grey-brown
+_COLOUR_STAR   = np.array([1.00, 0.92, 0.65], dtype=np.float32)   # warm yellow-white
 
 
 class Viewer:
@@ -39,7 +47,7 @@ class Viewer:
         self.world  = world
         self.cfg    = cfg
         self.paused = False
-        self.speed  = 1.0   # time-scale multiplier (keyboard controlled)
+        self.speed  = 1.0   # time-scale multiplier
 
         # ---- canvas -------------------------------------------------------
         bg = cfg.renderer.background
@@ -74,10 +82,10 @@ class Viewer:
             start=True,
         )
 
-        # ---- key bindings ------------------------------------------------
+        # ---- key bindings -------------------------------------------------
         self.canvas.events.key_press.connect(self._on_key)
 
-        # ---- perf tracking -----------------------------------------------
+        # ---- perf tracking ------------------------------------------------
         self._last_wall  = time.perf_counter()
         self._fps_acc    = 0.0
         self._fps_frames = 0
@@ -86,12 +94,12 @@ class Viewer:
     # ------------------------------------------------------------------
     # Timer callback — drives simulation + render each frame
     # ------------------------------------------------------------------
+
     def _on_timer(self, event) -> None:
         now  = time.perf_counter()
         wall = now - self._last_wall
         self._last_wall = now
 
-        # FPS
         self._fps_acc    += wall
         self._fps_frames += 1
         if self._fps_acc >= _FPS_WINDOW:
@@ -99,7 +107,6 @@ class Viewer:
             self._fps_acc    = 0.0
             self._fps_frames = 0
 
-        # Sim steps
         if not self.paused:
             dt      = self.cfg.simulation.time_step * self.speed
             n_steps = self.cfg.simulation.steps_per_frame
@@ -112,6 +119,7 @@ class Viewer:
     # ------------------------------------------------------------------
     # Update vispy visuals from world state
     # ------------------------------------------------------------------
+
     def _update_visuals(self) -> None:
         w   = self.world
         n   = w.n
@@ -125,16 +133,36 @@ class Viewer:
         pos   = w.positions[:n].copy()
         e_ids = w.elem_ids[:n]
 
-        # Build colour array (RGBA)
+        # --- Base CPK colours and covalent-radius sizes --------------------
         colors = np.ones((n, 4), dtype=np.float32)
+        sizes  = np.empty(n, dtype=np.float32)
         for idx in range(n):
-            colors[idx, :3] = ELEMENTS_LIST[e_ids[idx]].color
+            elem           = ELEMENTS_LIST[e_ids[idx]]
+            colors[idx, :3] = elem.color
+            sizes[idx]      = cfg.particle_size_base + cfg.particle_size_scale * elem.covalent_radius
 
-        # Particle sizes proportional to covalent radius
-        sizes = np.empty(n, dtype=np.float32)
-        for idx in range(n):
-            rc = ELEMENTS_LIST[e_ids[idx]].covalent_radius
-            sizes[idx] = cfg.particle_size_base + cfg.particle_size_scale * rc
+        # --- Override for accreted bodies (planets / stars) ----------------
+        rend_cfg = cfg
+        planet_threshold = float(getattr(rend_cfg, 'planet_mass_threshold', 1e9))
+        star_threshold   = float(getattr(rend_cfg, 'star_mass_threshold',   1e9))
+        body_size_scale  = float(getattr(rend_cfg, 'body_size_scale',       3.0))
+
+        elem_masses   = np.array([ELEMENTS_LIST[e_ids[i]].mass for i in range(n)], dtype=np.float64)
+        actual_masses = w.masses[:n]
+        mass_ratios   = actual_masses / elem_masses
+
+        planet_mask = (mass_ratios >= planet_threshold) & (mass_ratios < star_threshold)
+        star_mask   = mass_ratios >= star_threshold
+
+        if planet_mask.any():
+            body_sizes = (body_size_scale * np.cbrt(mass_ratios)).astype(np.float32)
+            colors[planet_mask, :3] = _COLOUR_PLANET
+            sizes[planet_mask]      = body_sizes[planet_mask]
+
+        if star_mask.any():
+            body_sizes = (body_size_scale * np.cbrt(mass_ratios) * 1.5).astype(np.float32)
+            colors[star_mask, :3] = _COLOUR_STAR
+            sizes[star_mask]      = body_sizes[star_mask]
 
         self.markers.set_data(
             pos=pos,
@@ -143,15 +171,14 @@ class Viewer:
             edge_width=0,
         )
 
-        # Bond lines
+        # --- Bond lines ----------------------------------------------------
         if cfg.show_bonds and len(w.bonds) > 0:
             bond_pts = []
             for bond in w.bonds:
                 bond_pts.append(w.positions[bond.i])
                 bond_pts.append(w.positions[bond.j])
-            pts = np.array(bond_pts, dtype=np.float32)
             self.lines.set_data(
-                pos=pts,
+                pos=np.array(bond_pts, dtype=np.float32),
                 color=(0.9, 0.9, 0.9, cfg.bond_alpha),
                 connect='segments',
             )
@@ -161,13 +188,14 @@ class Viewer:
         self.canvas.update()
 
     def _update_title(self) -> None:
-        w = self.world
+        w      = self.world
         counts = Counter(ELEMENTS_LIST[w.elem_ids[i]].symbol for i in range(w.n))
         top    = ' '.join(f'{s}:{c}' for s, c in counts.most_common(4))
         status = 'PAUSED ' if self.paused else ''
         self.canvas.title = (
             f'Universe | {status}'
-            f'n={w.n}  bonds={len(w.bonds)}  fusions={w.total_fusions}  '
+            f'n={w.n}  bonds={len(w.bonds)}  '
+            f'fusions={w.total_fusions}  accreted={w.total_accretions}  '
             f't={w.time:.1f}s  fps={self._fps:.0f}  '
             f'speed={self.speed:.1f}x  [{top}]'
         )
@@ -175,6 +203,7 @@ class Viewer:
     # ------------------------------------------------------------------
     # Keyboard
     # ------------------------------------------------------------------
+
     def _on_key(self, event) -> None:
         k = event.key.name if event.key else ''
         if k == 'Space':
@@ -191,5 +220,6 @@ class Viewer:
     # ------------------------------------------------------------------
     # Run
     # ------------------------------------------------------------------
+
     def run(self) -> None:
         app.run()

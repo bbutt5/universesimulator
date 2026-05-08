@@ -15,7 +15,7 @@ def _to_ns(obj):
 
 @pytest.fixture
 def cfg():
-    """Minimal simulation config for testing."""
+    """Minimal simulation config covering all modules."""
     return _to_ns({
         'simulation': {
             'injection_rate': 10,
@@ -31,6 +31,10 @@ def cfg():
             'softening_length': 1.0,
             'max_velocity': 1e6,
         },
+        'thermal': {
+            'pressure_constant': 0.4,
+            'pressure_cutoff': 200.0,
+        },
         'chemistry': {
             'bond_formation_factor': 1.4,
             'bond_velocity_threshold': 1000.0,
@@ -39,6 +43,11 @@ def cfg():
             'bond_break_factor': 2.8,
             'fusion_ke_threshold': 1.0,
             'fusion_enabled': True,
+            'radiation_radius': 500.0,
+            'radiation_energy_scale': 100.0,
+        },
+        'accretion': {
+            'accretion_radius': 150.0,
         },
         'cosmology': {
             'hubble_initial': 0.01,
