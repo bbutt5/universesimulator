@@ -18,6 +18,7 @@ Controls (built into vispy TurntableCamera):
   +/-         → speed up / slow down sim
   R           → reset zoom
   Q / Escape  → quit
+  Left-click  → inspect particle (click again to deselect)
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ import numpy as np
 
 from vispy import app, scene
 from vispy.scene import visuals
+from vispy.visuals.transforms import STTransform
 
 from sim.elements import ELEMENTS_LIST
 from sim.world import World
@@ -40,6 +42,7 @@ _CAM_ORBIT_STEP = 5.0    # degrees per arrow-key press
 _CAM_ZOOM_STEP  = 1.15   # zoom factor per Page Up/Down press
 _CAM_AZIMUTH_0  = 30.0   # default camera azimuth  (degrees)
 _CAM_ELEVATION_0 = 20.0  # default camera elevation (degrees)
+_PICK_PIXEL_RADIUS = 15.0  # click tolerance for particle picking
 
 # CPK colours for rendering classification
 _COLOUR_PLANET = np.array([0.55, 0.50, 0.42], dtype=np.float32)   # rocky grey-brown
@@ -86,8 +89,21 @@ class Viewer:
             start=True,
         )
 
+        # ---- selection / inspect ------------------------------------------
+        self._selected: int | None = None
+
+        self._select_marker = visuals.Markers(parent=self.view.scene)
+        self._select_marker.antialias = 0
+
+        self._info_text = visuals.Text(
+            '', color=(1.0, 1.0, 1.0, 0.9), font_size=9,
+            parent=self.canvas.scene, anchor_x='left', anchor_y='top',
+        )
+        self._info_text.transform = STTransform(translate=(10, 60))
+
         # ---- key bindings -------------------------------------------------
         self.canvas.events.key_press.connect(self._on_key)
+        self.canvas.events.mouse_press.connect(self._on_mouse_press)
 
         # ---- perf tracking ------------------------------------------------
         self._last_wall  = time.perf_counter()
@@ -130,9 +146,15 @@ class Viewer:
         cfg = self.cfg.renderer
 
         if n == 0:
+            self._selected = None
             self.markers.set_data(pos=np.zeros((1, 3)), face_color=(0, 0, 0, 0))
+            self._select_marker.set_data(pos=np.zeros((1, 3)), face_color=(0, 0, 0, 0), size=1, edge_width=0)
+            self._info_text.text = ''
             self.lines.set_data(pos=np.zeros((2, 3)))
             return
+
+        if self._selected is not None and self._selected >= n:
+            self._selected = None
 
         pos   = w.positions[:n].copy()
         e_ids = w.elem_ids[:n]
@@ -174,6 +196,26 @@ class Viewer:
             size=sizes,
             edge_width=0,
         )
+
+        # --- Selection ring + info text ------------------------------------
+        sel = self._selected
+        if sel is not None:
+            self._select_marker.set_data(
+                pos=pos[sel:sel + 1],
+                face_color=(0.0, 0.0, 0.0, 0.0),
+                size=float(sizes[sel]) + 10.0,
+                edge_width=2,
+                edge_color=(1.0, 1.0, 1.0, 1.0),
+            )
+            self._info_text.text = self._particle_info(sel)
+        else:
+            self._select_marker.set_data(
+                pos=np.zeros((1, 3), dtype=np.float32),
+                face_color=(0.0, 0.0, 0.0, 0.0),
+                size=1,
+                edge_width=0,
+            )
+            self._info_text.text = ''
 
         # --- Bond lines ----------------------------------------------------
         if cfg.show_bonds and len(w.bonds) > 0:
@@ -236,6 +278,83 @@ class Viewer:
             cam.center    = (0.0, 0.0, 0.0)
         elif k in ('Q', 'Escape'):
             self.canvas.app.quit()
+
+    # ------------------------------------------------------------------
+    # Mouse — particle picking
+    # ------------------------------------------------------------------
+
+    def _on_mouse_press(self, event) -> None:
+        if event.button != 1:
+            return
+        w = self.world
+        if w.n == 0:
+            return
+
+        click_xy = np.array(event.pos[:2], dtype=np.float32)
+        screen_xy, in_front = self._project_to_canvas(w.positions[:w.n])
+        if not in_front.any():
+            return
+
+        dists = np.linalg.norm(screen_xy - click_xy, axis=1)
+        dists[~in_front] = np.inf
+        nearest = int(np.argmin(dists))
+
+        if dists[nearest] < _PICK_PIXEL_RADIUS:
+            self._selected = nearest if self._selected != nearest else None
+        else:
+            self._selected = None
+
+    def _project_to_canvas(self, pos3d: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Project 3D world positions to 2D canvas pixel coords.
+
+        Returns (screen_xy, in_front) where in_front masks particles
+        not behind the camera. Handles the perspective divide that
+        vispy's transform.map() does not do automatically.
+        """
+        pts = np.asarray(pos3d, dtype=np.float32)
+        tr  = self.markers.transforms.get_transform('visual', 'canvas')
+        out = tr.map(pts)
+
+        if out.shape[1] == 4:
+            w_h      = out[:, 3]
+            in_front = w_h > 1e-6
+            safe_w   = np.where(np.abs(w_h) > 1e-9, w_h, 1.0)
+            screen_xy = out[:, :2] / safe_w[:, np.newaxis]
+        else:
+            screen_xy = out[:, :2]
+            in_front  = np.ones(pts.shape[0], dtype=bool)
+
+        return screen_xy, in_front
+
+    def _particle_info(self, i: int) -> str:
+        w    = self.world
+        elem = ELEMENTS_LIST[w.elem_ids[i]]
+        mass_ratio = w.masses[i] / elem.mass
+        speed      = float(np.linalg.norm(w.velocities[i]))
+        pos        = w.positions[i]
+
+        bonded = [
+            ELEMENTS_LIST[w.elem_ids[b.j if b.i == i else b.i]].symbol
+            for b in w.bonds if b.i == i or b.j == i
+        ]
+
+        planet_threshold = float(getattr(self.cfg.renderer, 'planet_mass_threshold', 1e9))
+        star_threshold   = float(getattr(self.cfg.renderer, 'star_mass_threshold',   1e9))
+        if mass_ratio >= star_threshold:
+            kind = 'STAR'
+        elif mass_ratio >= planet_threshold:
+            kind = 'PLANET'
+        else:
+            kind = 'atom'
+
+        lines = [
+            f'[{kind}] {elem.name} ({elem.symbol})  Z={elem.Z}',
+            f'mass: {w.masses[i]:.3g}  ratio: {mass_ratio:.2f}x',
+            f'pos:   ({pos[0]:.1f}, {pos[1]:.1f}, {pos[2]:.1f})',
+            f'speed: {speed:.1f}',
+            f'bonds: {w.bond_counts[i]}' + (f'  → {" ".join(bonded)}' if bonded else ''),
+        ]
+        return '\n'.join(lines)
 
     # ------------------------------------------------------------------
     # Run
