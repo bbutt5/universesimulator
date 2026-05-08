@@ -1,0 +1,78 @@
+simulation:
+  injection_rate: 100          # particles injected per real second
+  injection_radius_initial: 5.0    # starting radius — near zero, like the Big Bang (SU)
+  injection_radius_expansion: 40.0 # how fast the injection zone grows (SU per sim-second)
+  injection_velocity_max: 8.0  # max random initial speed (SU/s)
+  time_step: 0.02              # simulation seconds per physics step
+  steps_per_frame: 1           # physics steps per render frame
+  max_particles: 1000          # smooth at 1000 on most hardware; see physics.py comments for numba upgrade
+
+physics:
+  gravity_constant: 8000.0     # scaled G; real G=6.674e-11 N·m²/kg², amplified for visibility
+  softening_length: 40.0       # prevents force singularity at r→0 (SU)
+  max_velocity: 2000.0         # velocity cap to prevent numerical blow-up (SU/s)
+
+chemistry:
+  bond_formation_factor: 1.4   # form bond when dist < factor * (rc_i + rc_j)
+  bond_velocity_threshold: 60.0  # max relative speed to allow bonding (SU/s)
+  bond_spring_constant: 0.8    # Morse well spring constant k (energy/SU²)
+  bond_de_scale: 80.0          # global dissociation energy scale (simulation energy units)
+  bond_break_factor: 2.8       # break bond when dist > factor * equilibrium_length
+  fusion_ke_threshold: 4000.0  # relative KE (½μv²) required for nuclear fusion
+  fusion_enabled: true
+
+cosmology:
+  # --------------------------------------------------------------------------
+  # These are INITIAL CONDITIONS given to each particle at birth.
+  # No ongoing forces are added — gravity does everything after.
+  # --------------------------------------------------------------------------
+
+  # Hubble initial velocity: each particle is born moving outward at a speed
+  # proportional to its distance from the origin.  This is the Big Bang
+  # initial condition — the universe was born expanding.
+  # Units: (SU/s) per SU of distance from origin.  0 = disabled.
+  hubble_initial: 0.006
+
+  # Primordial density perturbations: a handful of overdense seed regions bias
+  # where particles are born (analogous to quantum fluctuations during inflation).
+  # Gravity amplifies these → separate collapsing clouds → tidal torques between
+  # neighbouring clouds → angular momentum emerges naturally (tidal torque theory).
+  # 0 seeds = uniform injection (no structure formation).
+  n_density_seeds: 8
+
+  # How much denser the seed regions are vs the background.
+  # Higher = stronger perturbations = faster structure formation.
+  perturbation_amplitude: 5.0
+
+  # Size of each seed region as a fraction of the current injection radius.
+  perturbation_scale: 0.25
+
+injection:
+  # Cosmic abundances by particle number fraction (must sum to ~100)
+  # Based on Solar System composition data
+  elements:
+    H:  73.9
+    He: 24.0
+    O:  1.04
+    C:  0.46
+    Ne: 0.13
+    Fe: 0.109
+    N:  0.096
+    Si: 0.065
+    Mg: 0.058
+    S:  0.044
+    Ar: 0.015
+    Ca: 0.009
+    Ni: 0.005
+
+renderer:
+  width: 1280
+  height: 720
+  background: [0.02, 0.02, 0.06]
+  particle_size_base: 5.0      # base render size (px)
+  particle_size_scale: 0.08    # size scales with atomic radius: base + scale * cov_radius
+  show_bonds: true
+  bond_alpha: 0.45
+  camera_distance: 3000.0
+  fov: 60.0
+  show_hud: true               # show stats overlay (particle count, bonds, etc.)
