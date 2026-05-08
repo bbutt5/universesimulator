@@ -55,9 +55,10 @@ def main() -> None:
     print(f'  Fusion         : {"enabled" if cfg.chemistry.fusion_enabled else "disabled"}')
     print()
     print('Controls:')
-    print('  Left-drag  → orbit   |  Right-drag → zoom  |  Middle → pan')
-    print('  Space      → pause   |  +/-        → speed up/down')
-    print('  R          → reset zoom             |  Q / Esc → quit')
+    print('  Left-drag        → orbit   |  Right-drag / Scroll → zoom  |  Middle → pan')
+    print('  Arrow keys       → orbit   |  Page Up/Down        → zoom')
+    print('  Space            → pause   |  +/-                 → speed up/down')
+    print('  R                → reset camera  |  Q / Esc → quit')
     print()
 
     viewer.run()

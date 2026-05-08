@@ -31,11 +31,15 @@ from vispy.scene import visuals
 from sim.elements import ELEMENTS_LIST
 from sim.world import World
 
-_FPS_TARGET = 60
-_FPS_WINDOW = 0.5     # smoothing window for FPS measurement (seconds)
-_SPEED_UP   = 2.0     # speed multiplier per keypress
-_SPEED_MAX  = 64.0
-_SPEED_MIN  = 0.0625  # 1/16×
+_FPS_TARGET    = 60
+_FPS_WINDOW    = 0.5     # smoothing window for FPS measurement (seconds)
+_SPEED_UP      = 2.0     # speed multiplier per keypress
+_SPEED_MAX     = 64.0
+_SPEED_MIN     = 0.0625  # 1/16×
+_CAM_ORBIT_STEP = 5.0    # degrees per arrow-key press
+_CAM_ZOOM_STEP  = 1.15   # zoom factor per Page Up/Down press
+_CAM_AZIMUTH_0  = 30.0   # default camera azimuth  (degrees)
+_CAM_ELEVATION_0 = 20.0  # default camera elevation (degrees)
 
 # CPK colours for rendering classification
 _COLOUR_PLANET = np.array([0.55, 0.50, 0.42], dtype=np.float32)   # rocky grey-brown
@@ -62,8 +66,8 @@ class Viewer:
         self.view.camera           = 'turntable'
         self.view.camera.fov       = cfg.renderer.fov
         self.view.camera.distance  = cfg.renderer.camera_distance
-        self.view.camera.azimuth   = 30.0
-        self.view.camera.elevation = 20.0
+        self.view.camera.azimuth   = _CAM_AZIMUTH_0
+        self.view.camera.elevation = _CAM_ELEVATION_0
 
         # ---- visuals -------------------------------------------------------
         self.markers = visuals.Markers(parent=self.view.scene)
@@ -205,15 +209,31 @@ class Viewer:
     # ------------------------------------------------------------------
 
     def _on_key(self, event) -> None:
-        k = event.key.name if event.key else ''
+        k   = event.key.name if event.key else ''
+        cam = self.view.camera
         if k == 'Space':
             self.paused = not self.paused
         elif k in ('Equal', '+'):
             self.speed = min(self.speed * _SPEED_UP, _SPEED_MAX)
         elif k in ('Minus', '-'):
             self.speed = max(self.speed / _SPEED_UP, _SPEED_MIN)
+        elif k == 'Left':
+            cam.azimuth -= _CAM_ORBIT_STEP
+        elif k == 'Right':
+            cam.azimuth += _CAM_ORBIT_STEP
+        elif k == 'Up':
+            cam.elevation = min(cam.elevation + _CAM_ORBIT_STEP, 90.0)
+        elif k == 'Down':
+            cam.elevation = max(cam.elevation - _CAM_ORBIT_STEP, -90.0)
+        elif k == 'PageUp':
+            cam.distance = max(cam.distance / _CAM_ZOOM_STEP, 1.0)
+        elif k == 'PageDown':
+            cam.distance *= _CAM_ZOOM_STEP
         elif k == 'R':
-            self.view.camera.distance = self.cfg.renderer.camera_distance
+            cam.azimuth   = _CAM_AZIMUTH_0
+            cam.elevation = _CAM_ELEVATION_0
+            cam.distance  = self.cfg.renderer.camera_distance
+            cam.center    = (0.0, 0.0, 0.0)
         elif k in ('Q', 'Escape'):
             self.canvas.app.quit()
 

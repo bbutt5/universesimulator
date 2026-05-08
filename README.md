@@ -40,15 +40,17 @@ python main.py --settings path/to/settings.yaml
 
 ### Controls
 
-| Key / Mouse         | Action              |
-|---------------------|---------------------|
-| Left-drag           | Orbit camera        |
-| Right-drag / Scroll | Zoom                |
-| Middle-drag         | Pan                 |
-| Space               | Pause / resume      |
-| `+` / `-`           | Speed up / slow down |
-| `R`                 | Reset zoom          |
-| `Q` / `Escape`      | Quit                |
+| Key / Mouse             | Action                  |
+|-------------------------|-------------------------|
+| Left-drag               | Orbit camera            |
+| Right-drag / Scroll     | Zoom                    |
+| Middle-drag             | Pan                     |
+| Arrow keys              | Orbit (5° per press)    |
+| Page Up / Page Down     | Zoom in / out           |
+| Space                   | Pause / resume          |
+| `+` / `-`               | Speed up / slow down    |
+| `R`                     | Reset camera to default |
+| `Q` / `Escape`          | Quit                    |
 
 ## Configuration
 
