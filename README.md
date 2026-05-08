@@ -20,9 +20,16 @@ No galaxy shapes are hardcoded. Structure emerges naturally from primordial dens
 - NumPy
 - PyYAML
 
-```
+```bash
 pip install vispy numpy pyyaml
 ```
+
+> **Note:** If you use conda, install dependencies into your environment first or use a virtualenv:
+> ```bash
+> python -m venv .venv
+> source .venv/bin/activate   # Windows: .venv\Scripts\activate
+> pip install vispy numpy pyyaml
+> ```
 
 ## Usage
 
