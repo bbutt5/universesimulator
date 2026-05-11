@@ -1,19 +1,30 @@
 # Universe Simulator
 
-A 3D real-time particle physics simulation that grows a universe from nothing — starting with empty space, injecting atoms at cosmic abundances, and letting gravity, chemistry, and nuclear fusion do the rest.
+A 3D real-time particle physics simulation that grows a universe from nothing — starting with empty space, injecting atoms at cosmic abundances, and letting four independent emergent mechanisms produce structure.
 
-No galaxy shapes are hardcoded. Structure emerges naturally from primordial density perturbations, Hubble expansion, and gravitational collapse.
+No galaxy shapes, planet locations, or stellar lifecycles are hardcoded. They fall out of:
 
-**Project principle:** prefer emergent / derived-from-physics approaches over hardcoded constants, tables, and flags. See [PHILOSOPHY.md](PHILOSOPHY.md).
+1. **N-body gravity** with primordial density seeds and Hubble expansion (initial conditions only) — drives long-range structure formation.
+2. **Covalent chemistry** (Pauling bond energies from real electronegativity data) — atoms bind into molecules in cold dense regions.
+3. **Nuclear fusion** (Coulomb-barrier gated, Q-values from AME 2020 isotope masses) — stellar nucleosynthesis chain: pp-chain → triple-alpha → alpha-capture → iron peak.
+4. **Gravitational accretion** of bound non-fusing pairs — converts the binding-energy excess into solid planetesimals and rocky bodies. This is a *separate* mechanism from gravity, doing the work of coagulation that real molecular clouds and protoplanetary disks rely on.
+
+The simulator surfaces conservation-law diagnostics in its HUD (total energy + drift %, velocity-clamp counter) so you can verify the symplectic integrator isn't accumulating error and the velocity cap isn't silently breaking momentum.
+
+**Project principle:** prefer emergent / derived-from-physics approaches over hardcoded constants, tables, and flags. Every numerical value in `sim/elements.py` is a real measured quantity (NIST, AME, CRC) with a citation in the source. See [PHILOSOPHY.md](PHILOSOPHY.md).
 
 ## Features
 
-- **N-body gravity** — symmetric O(N²/2) with Newton's 3rd law, vectorised with NumPy
-- **Covalent bonding** — Morse potential; atoms stay separate, held by a spring-like force
-- **Nuclear fusion** — stellar nucleosynthesis chain (pp-chain → triple-alpha → alpha capture → iron peak)
-- **Cosmological initial conditions** — Hubble expansion velocity and primordial density seeds produce emerging angular momentum without any hardcoded rotation
-- **Real periodic table** — cosmic element abundances (H 74%, He 24%, traces of O, C, Ne, Fe, …)
-- **3D vispy renderer** — CPK-coloured particles, bond lines, live HUD, interactive camera
+- **N-body gravity** — symmetric O(N²/2) with Newton's 3rd law, vectorised with NumPy. Hits a wall around N=2000 in pure NumPy; see Performance.
+- **Covalent bonding** — Pauling bond energies (`D(A-B) = √(D_AA·D_BB) + 96·Δχ²`, kJ/mol) with measured electronegativities; Morse potential drives the force.
+- **Nuclear fusion** — Coulomb-barrier gate (`V_C = scale·Z₁Z₂ / r_nuc`, real r₀ = 1.2 fm from Krane); Q-values from AME 2020 isotope masses; energy-conservation gate (rel_KE + Q ≥ 0). The chain that emerges: pp-chain → triple-alpha → alpha-capture → silicon-burning → iron peak.
+- **Gravitational accretion** — bound non-fusing pairs merge, conserving momentum and inheriting the heavier element's identity. This is the *coagulation* mechanism that produces planetesimals (mostly heavy elements) while light hot pairs defer to fusion.
+- **Per-element ionisation** — first-IE values from NIST drive each particle's plasma threshold; hysteresis on recombination matches real plasma physics.
+- **Four states of matter** — solid / liquid / gas / plasma classified from local density + relative-KE + bonding + ionisation. Live counts in the HUD.
+- **Conservation diagnostics** — total KE + PE in the HUD with drift % since t=0 (velocity-Verlet is symplectic, so non-zero drift means dt is too large or softening is too small). Velocity-clamp counter exposes how often the numerical max-speed band-aid fires.
+- **Cosmological initial conditions** — Hubble expansion velocity and primordial density seeds; angular momentum from tidal torques, no hardcoded rotation.
+- **Real periodic table** — masses from AME 2020 (dominant isotope), covalent radii from Cordero 2008, electronegativities from Pauling, bond energies from CRC Handbook, ionisation energies from NIST ASD. Every value cited in `sim/elements.py`.
+- **3D vispy renderer** — CPK-coloured particles, bond lines, click-to-inspect, live HUD, interactive camera
 
 ## Requirements
 
@@ -76,7 +87,10 @@ injection:
 
 ## Performance
 
-Pure NumPy gravity runs smoothly at N=1000 on most modern hardware. For larger simulations, install [numba](https://numba.pydata.org/) and uncomment the `@njit` block in [`sim/physics.py`](sim/physics.py) for a 10–50× speedup.
+Pure NumPy gravity runs smoothly at N=1000 on most modern hardware. For larger simulations:
+
+- **N=1k–10k:** install [numba](https://numba.pydata.org/) and uncomment the `@njit` block in [`sim/physics.py`](sim/physics.py) for a 10–50× speedup ([issue #7](https://github.com/billymahmood/universesimulator/issues/7)).
+- **N=10k+:** the O(N²) gravity becomes the bottleneck even with numba. You'd want a Barnes–Hut tree (O(N log N)). Not implemented yet — open for contribution.
 
 ## Architecture
 
@@ -84,13 +98,20 @@ Pure NumPy gravity runs smoothly at N=1000 on most modern hardware. For larger s
 main.py          — entry point, config loading
 settings.yaml    — all tunable parameters
 sim/
-  elements.py    — periodic table data, fusion reaction table
+  elements.py    — periodic table (real measured data + citations)
+  nuclear.py     — Coulomb barrier + Q-value formulae for fusion
   particle.py    — Bond class (Morse potential)
-  world.py       — simulation state, velocity-Verlet integrator
+  spatial.py     — O(1) neighbour-lookup grid (shared by chemistry, thermal, vdw, accretion)
   physics.py     — gravity + bond forces (NumPy vectorised)
-  chemistry.py   — bond formation/breaking, nuclear fusion
+  thermal.py     — thermal pressure (kinetic-pressure analogue)
+  vdw.py         — van der Waals attraction (cold-pair condensation)
+  chemistry.py   — bond formation/breaking, nuclear fusion + radiation kicks
+  accretion.py   — gravitational coagulation of bound non-fusing pairs
+  states.py      — solid / liquid / gas / plasma classifier
+  diagnostics.py — energy + momentum conservation diagnostics
   injector.py    — particle birth (position, velocity, element sampling)
-  viewer.py      — vispy 3D renderer + keyboard controls
+  world.py       — simulation state, velocity-Verlet integrator, step loop
+  viewer.py      — vispy 3D renderer + keyboard / mouse controls
 ```
 
 ## License

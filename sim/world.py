@@ -59,10 +59,11 @@ class World:
         self.bonds: list[Bond] = []
 
         # Counters for HUD
-        self.total_injected:     int = 0
-        self.total_fusions:      int = 0
-        self.total_bonds_formed: int = 0
-        self.total_accretions:   int = 0
+        self.total_injected:        int = 0
+        self.total_fusions:         int = 0
+        self.total_bonds_formed:    int = 0
+        self.total_accretions:      int = 0
+        self.total_velocity_clamps: int = 0    # diagnostics: each clamp breaks momentum conservation
 
         # Deferred injection accumulator (fractional particles)
         self._inject_acc: float = 0.0
@@ -207,10 +208,16 @@ class World:
         vel += 0.5 * ((f_prev + f_cur) / m[:, np.newaxis]) * dt
 
         # 5. Clamp velocity
+        # NOTE: This is a numerical band-aid, not physics. Rescaling a
+        # particle's velocity magnitude silently destroys momentum
+        # conservation; we count every clamp so the user can see if it's
+        # firing too often (= integrator instability, dt too large, or
+        # softening too small).
         v_max    = self.cfg.physics.max_velocity
         speeds   = np.linalg.norm(vel, axis=1, keepdims=True)
         too_fast = speeds > v_max
         if np.any(too_fast):
+            self.total_velocity_clamps += int(np.count_nonzero(too_fast))
             vel[too_fast[:, 0]] *= v_max / speeds[too_fast[:, 0]]
 
         # 6. Ionisation flag update (must precede chemistry so ionised

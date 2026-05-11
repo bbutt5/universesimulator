@@ -30,6 +30,7 @@ from vispy import app, scene
 from vispy.scene import visuals
 from vispy.visuals.transforms import STTransform
 
+from sim.diagnostics import kinetic_energy, gravitational_pe, linear_momentum
 from sim.elements import ELEMENTS_LIST
 from sim.states import state_counts
 from sim.world import World
@@ -44,6 +45,7 @@ _CAM_ZOOM_STEP  = 1.15   # zoom factor per Page Up/Down press
 _CAM_AZIMUTH_0  = 30.0   # default camera azimuth  (degrees)
 _CAM_ELEVATION_0 = 20.0  # default camera elevation (degrees)
 _PICK_PIXEL_RADIUS = 15.0  # click tolerance for particle picking
+_ENERGY_REFRESH_FRAMES = 30   # how often to recompute O(N²) gravitational PE
 
 # CPK colours for rendering classification
 _COLOUR_PLANET = np.array([0.55, 0.50, 0.42], dtype=np.float32)   # rocky grey-brown
@@ -113,6 +115,14 @@ class Viewer:
         self._fps_acc    = 0.0
         self._fps_frames = 0
         self._fps        = 0.0
+
+        # ---- conservation diagnostics -------------------------------------
+        # Recompute the O(N²) PE every _ENERGY_REFRESH_FRAMES; cache between.
+        self._ke           = 0.0
+        self._pe           = 0.0
+        self._momentum_mag = 0.0
+        self._energy_ref   = None     # set once we have ≥2 particles
+        self._energy_frame = 0
 
     # ------------------------------------------------------------------
     # Timer callback — drives simulation + render each frame
@@ -254,11 +264,28 @@ class Viewer:
         top    = ' '.join(f'{s}:{c}' for s, c in counts.most_common(4))
         sc     = state_counts(w)
         status = 'PAUSED ' if self.paused else ''
+
+        # Conservation diagnostics (throttled — gravitational PE is O(N²))
+        self._energy_frame += 1
+        if self._energy_frame % _ENERGY_REFRESH_FRAMES == 0 or self._energy_ref is None:
+            self._ke = kinetic_energy(w)
+            self._pe = gravitational_pe(w)
+            self._momentum_mag = float(np.linalg.norm(linear_momentum(w)))
+            if self._energy_ref is None and w.n >= 2:
+                self._energy_ref = self._ke + self._pe   # set baseline once
+
+        e_total = self._ke + self._pe
+        drift   = ''
+        if self._energy_ref is not None and self._energy_ref != 0:
+            drift_pct = 100.0 * (e_total - self._energy_ref) / abs(self._energy_ref)
+            drift     = f' drift={drift_pct:+.2f}%'
+
         self.canvas.title = (
             f'Universe | {status}'
             f'n={w.n}  bonds={len(w.bonds)}  '
             f'fusions={w.total_fusions}  accreted={w.total_accretions}  '
             f'S:{sc["solid"]} L:{sc["liquid"]} G:{sc["gas"]} P:{sc["plasma"]}  '
+            f'E={e_total:.2e}{drift}  clamps={w.total_velocity_clamps}  '
             f't={w.time:.1f}s  fps={self._fps:.0f}  '
             f'speed={self.speed:.1f}x  [{top}]'
         )

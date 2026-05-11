@@ -37,6 +37,8 @@ def update(world) -> None:
 
     G       = world.cfg.physics.gravity_constant
     cutoff  = float(cfg.accretion_radius)
+    if cutoff <= 0.0:
+        return            # accretion disabled
     cutoff_sq = cutoff ** 2
 
     n   = world.n
