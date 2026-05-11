@@ -39,11 +39,13 @@ def add_thermal_pressure(world, forces: np.ndarray) -> None:
 
     cutoff    = float(cfg.pressure_cutoff)
     k_p       = float(cfg.pressure_constant)
+    plasma_k  = float(getattr(cfg, 'plasma_repulsion_factor', 1.0))
     cutoff_sq = cutoff ** 2
 
-    pos = world.positions[:n]
-    vel = world.velocities[:n]
-    m   = world.masses[:n]
+    pos     = world.positions[:n]
+    vel     = world.velocities[:n]
+    m       = world.masses[:n]
+    ionized = world.ionized[:n]
 
     grid = build_grid(pos, cutoff)
 
@@ -66,6 +68,7 @@ def add_thermal_pressure(world, forces: np.ndarray) -> None:
                 continue
 
             unit  = dr / r
-            F_vec = (k_p * rel_ke / r_sq) * unit
+            mult  = plasma_k if (ionized[i] and ionized[j]) else 1.0
+            F_vec = (mult * k_p * rel_ke / r_sq) * unit
             forces[i] -= F_vec   # repel i away from j
             forces[j] += F_vec   # repel j away from i

@@ -34,6 +34,11 @@ def cfg():
         'thermal': {
             'pressure_constant': 0.4,
             'pressure_cutoff': 200.0,
+            'vdw_strength': 25.0,
+            'vdw_cutoff':   300.0,
+            'ionization_ke_threshold':    100000.0,
+            'recombination_ke_threshold': 10000.0,
+            'plasma_repulsion_factor':    2.0,
         },
         'chemistry': {
             'bond_formation_factor': 1.4,

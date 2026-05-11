@@ -22,6 +22,28 @@ thermal:
   pressure_constant: 0.4       # k_p: repulsion strength (scales with relative KE)
   pressure_cutoff: 200.0       # neighbourhood radius for pressure interactions (SU)
 
+  # --------------------------------------------------------------------------
+  # Van der Waals attraction — weak long-range pull between cold non-bonded
+  # atoms.  Without this, inert atoms (He, Ne, Ar) and non-bonded neutrals
+  # drift through each other forever.  With it, cold clouds condense into
+  # liquid and solid phases (water and earth).  Competes directly with
+  # thermal pressure: cold pair → VdW wins → condense; hot pair → pressure
+  # wins → vapourise.
+  # --------------------------------------------------------------------------
+  vdw_strength: 25.0           # k_vdw: attractive strength (force ∝ k / r²)
+  vdw_cutoff:   300.0          # max range (SU); inside covalent r_min skipped
+
+  # --------------------------------------------------------------------------
+  # Ionisation — particles whose KE exceeds the upper threshold are flagged
+  # as plasma: they break their bonds, cannot form new ones, and repel other
+  # ionised particles more strongly (plasma_repulsion_factor multiplies their
+  # mutual thermal pressure).  Hysteresis between the two thresholds prevents
+  # flickering on the boundary.
+  # --------------------------------------------------------------------------
+  ionization_ke_threshold:    500000.0  # KE above which a particle ionises
+  recombination_ke_threshold: 100000.0  # KE below which an ionised particle recombines
+  plasma_repulsion_factor:    2.0        # extra multiplier on thermal pressure for ion-ion pairs
+
 chemistry:
   bond_formation_factor: 1.4   # form bond when dist < factor * (rc_i + rc_j)
   bond_velocity_threshold: 60.0  # max relative speed to allow bonding (SU/s)
@@ -108,3 +130,6 @@ renderer:
   planet_mass_threshold: 20.0  # mass_ratio above which a particle renders as a planet
   star_mass_threshold: 200.0   # mass_ratio above which a particle renders as a star
   body_size_scale: 3.0         # size = body_size_scale × cbrt(mass_ratio)  (px)
+
+  # KE at which colour blends fully to "hot" (orange-red). 0 disables the tint.
+  hot_temperature_threshold: 500000.0

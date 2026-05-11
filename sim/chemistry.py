@@ -58,11 +58,17 @@ def update(world) -> None:
 def _break_bonds(world) -> None:
     cfg       = world.cfg.chemistry
     pos       = world.positions
+    ionized   = world.ionized
     threshold = cfg.bond_break_factor
 
     keep = []
     for bond in world.bonds:
         i, j = bond.i, bond.j
+        # Ionisation strips electrons → covalent bond cannot survive
+        if ionized[i] or ionized[j]:
+            world.bond_counts[i] = max(0, world.bond_counts[i] - 1)
+            world.bond_counts[j] = max(0, world.bond_counts[j] - 1)
+            continue
         r = float(np.linalg.norm(pos[j] - pos[i]))
         if r > threshold * bond.length_eq:
             world.bond_counts[i] = max(0, world.bond_counts[i] - 1)
@@ -103,9 +109,13 @@ def _form_bonds(world) -> None:
     k         = cfg.bond_spring_constant
     v_thresh  = cfg.bond_velocity_threshold
 
+    ionized = world.ionized
+
     for i in range(world.n):
         elem_i = ELEMENTS_LIST[world.elem_ids[i]]
         if elem_i.max_bonds == 0 or bond_counts[i] >= elem_i.max_bonds:
+            continue
+        if ionized[i]:
             continue
 
         for j in neighbors(i, pos, grid, cell_size):
@@ -113,6 +123,8 @@ def _form_bonds(world) -> None:
                 continue
             key = (i, j)
             if key in bonded:
+                continue
+            if ionized[j]:
                 continue
 
             elem_j = ELEMENTS_LIST[world.elem_ids[j]]

@@ -31,6 +31,7 @@ from sim.elements import ELEMENTS_LIST, SYMBOL_TO_ID, Element
 from sim.injector import Injector
 from sim.particle import Bond
 from sim.thermal import add_thermal_pressure
+from sim.vdw import add_vdw_forces
 
 _INIT_CAP = 8_192   # initial allocation; doubles when full
 
@@ -48,6 +49,7 @@ class World:
         self.masses      = np.zeros(cap,       dtype=np.float64)
         self.elem_ids    = np.zeros(cap,       dtype=np.int32)   # index into ELEMENTS_LIST
         self.bond_counts = np.zeros(cap,       dtype=np.int32)
+        self.ionized     = np.zeros(cap,       dtype=bool)       # plasma flag
 
         self._cap = cap
         self.n: int = 0
@@ -89,6 +91,7 @@ class World:
         self.masses      = _ext1(self.masses)
         self.elem_ids    = _ext1(self.elem_ids)
         self.bond_counts = _ext1(self.bond_counts)
+        self.ionized     = _ext1(self.ionized)
         self._cap = new_cap
 
     # ------------------------------------------------------------------
@@ -106,6 +109,7 @@ class World:
         self.masses[i]      = element.mass
         self.elem_ids[i]    = SYMBOL_TO_ID[element.symbol]
         self.bond_counts[i] = 0
+        self.ionized[i]     = False
         self.n += 1
         self.total_injected += 1
         return i
@@ -130,6 +134,7 @@ class World:
             self.masses[i]      = self.masses[last]
             self.elem_ids[i]    = self.elem_ids[last]
             self.bond_counts[i] = self.bond_counts[last]
+            self.ionized[i]     = self.ionized[last]
             for b in self.bonds:
                 if b.i == last: b.i = i
                 if b.j == last: b.j = i
@@ -194,6 +199,7 @@ class World:
         physics.add_gravity(self, f_cur)
         physics.add_bond_forces(self, f_cur)
         add_thermal_pressure(self, f_cur)
+        add_vdw_forces(self, f_cur)
 
         # 4. Velocity-Verlet second half: v(t+dt) = v(t) + ½(a_old+a_new)·dt
         vel += 0.5 * ((f_prev + f_cur) / m[:, np.newaxis]) * dt
@@ -205,10 +211,37 @@ class World:
         if np.any(too_fast):
             vel[too_fast[:, 0]] *= v_max / speeds[too_fast[:, 0]]
 
-        # 6. Chemistry: bonds + fusion + radiation kicks
+        # 6. Ionisation flag update (must precede chemistry so ionised
+        #    atoms drop their bonds this step)
+        self._update_ionization()
+
+        # 7. Chemistry: bonds + fusion + radiation kicks
         chemistry.update(self)
 
-        # 7. Accretion: heavy inert particles merge into bodies
+        # 8. Accretion: heavy inert particles merge into bodies
         accretion.update(self)
 
         self.time += dt
+
+    # ------------------------------------------------------------------
+    # Ionisation — flags particles whose kinetic energy makes them plasma
+    # ------------------------------------------------------------------
+
+    def _update_ionization(self) -> None:
+        cfg = getattr(self.cfg, 'thermal', None)
+        if cfg is None:
+            return
+        ion_thresh    = float(getattr(cfg, 'ionization_ke_threshold',    0.0))
+        recomb_thresh = float(getattr(cfg, 'recombination_ke_threshold', 0.0))
+        if ion_thresh <= 0.0:
+            return
+
+        n = self.n
+        if n == 0:
+            return
+
+        ke         = 0.5 * self.masses[:n] * np.sum(self.velocities[:n] ** 2, axis=1)
+        currently  = self.ionized[:n]
+        becoming   = ke > ion_thresh
+        staying    = currently & (ke > recomb_thresh)   # hysteresis
+        self.ionized[:n] = becoming | staying

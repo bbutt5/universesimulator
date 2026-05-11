@@ -31,6 +31,7 @@ from vispy.scene import visuals
 from vispy.visuals.transforms import STTransform
 
 from sim.elements import ELEMENTS_LIST
+from sim.states import state_counts
 from sim.world import World
 
 _FPS_TARGET    = 60
@@ -47,6 +48,8 @@ _PICK_PIXEL_RADIUS = 15.0  # click tolerance for particle picking
 # CPK colours for rendering classification
 _COLOUR_PLANET = np.array([0.55, 0.50, 0.42], dtype=np.float32)   # rocky grey-brown
 _COLOUR_STAR   = np.array([1.00, 0.92, 0.65], dtype=np.float32)   # warm yellow-white
+_COLOUR_HOT    = np.array([1.00, 0.40, 0.10], dtype=np.float32)   # heat tint blended in
+_COLOUR_PLASMA = np.array([0.70, 0.85, 1.00], dtype=np.float32)   # ionised: bluish-white
 
 
 class Viewer:
@@ -167,6 +170,18 @@ class Viewer:
             colors[idx, :3] = elem.color
             sizes[idx]      = cfg.particle_size_base + cfg.particle_size_scale * elem.covalent_radius
 
+        # --- Temperature tint (cold → CPK, hot → orange-red) --------------
+        hot_T = float(getattr(cfg, 'hot_temperature_threshold', 0.0))
+        if hot_T > 0.0:
+            ke   = 0.5 * w.masses[:n] * np.sum(w.velocities[:n] ** 2, axis=1)
+            heat = np.clip(ke / hot_T, 0.0, 1.0).astype(np.float32)[:, np.newaxis]
+            colors[:, :3] = colors[:, :3] * (1.0 - heat) + _COLOUR_HOT * heat
+
+        # --- Plasma override (ionised particles) ---------------------------
+        ion_mask = w.ionized[:n]
+        if ion_mask.any():
+            colors[ion_mask, :3] = _COLOUR_PLASMA
+
         # --- Override for accreted bodies (planets / stars) ----------------
         rend_cfg = cfg
         planet_threshold = float(getattr(rend_cfg, 'planet_mass_threshold', 1e9))
@@ -237,11 +252,13 @@ class Viewer:
         w      = self.world
         counts = Counter(ELEMENTS_LIST[w.elem_ids[i]].symbol for i in range(w.n))
         top    = ' '.join(f'{s}:{c}' for s, c in counts.most_common(4))
+        sc     = state_counts(w)
         status = 'PAUSED ' if self.paused else ''
         self.canvas.title = (
             f'Universe | {status}'
             f'n={w.n}  bonds={len(w.bonds)}  '
             f'fusions={w.total_fusions}  accreted={w.total_accretions}  '
+            f'S:{sc["solid"]} L:{sc["liquid"]} G:{sc["gas"]} P:{sc["plasma"]}  '
             f't={w.time:.1f}s  fps={self._fps:.0f}  '
             f'speed={self.speed:.1f}x  [{top}]'
         )
