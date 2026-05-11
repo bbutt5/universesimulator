@@ -52,7 +52,13 @@ chemistry:
   bond_formation_factor: 1.4   # form bond when dist < factor * (rc_i + rc_j)
   bond_velocity_threshold: 60.0  # max relative speed to allow bonding (SU/s)
   bond_spring_constant: 0.8    # Morse well spring constant k (energy/SU²)
-  bond_de_scale: 80.0          # global dissociation energy scale (simulation energy units)
+  # Bond dissociation energy uses Pauling's real formula
+  #   D(A-B) = √(D_AA·D_BB) + 96·(χ_A−χ_B)²   [kJ/mol]
+  # with measured D(X-X) and electronegativities from elements.py. The scale
+  # below is the sole remaining knob: a unit conversion (sim energy / kJ·mol⁻¹)
+  # that exists only because the sim runs in custom energy units. Calibrated
+  # so H-H bond depth ≈ old 80 sim-energy: scale = 80 / 436 ≈ 0.184.
+  bond_energy_scale: 0.184
   bond_break_factor: 2.8       # break bond when dist > factor * equilibrium_length
   # Nuclear fusion is gated by the classical Coulomb barrier:
   #   V_C = coulomb_barrier_scale · Z₁·Z₂ / (r₀·(A₁^⅓ + A₂^⅓))

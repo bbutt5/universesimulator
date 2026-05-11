@@ -40,6 +40,7 @@ import numpy as np
 from sim.elements import (
     ELEMENTS, ELEMENTS_LIST, fusion_product,
     ATOMIC_NUMBERS_Z, MASS_NUMBERS_A,
+    pauling_bond_energy_kjmol,
 )
 from sim.nuclear import coulomb_barriers_matrix
 from sim.particle import Bond
@@ -111,9 +112,12 @@ def _form_bonds(world) -> None:
     cell_size = cfg.bond_formation_factor * 2.0 * max_rc
     grid      = build_grid(pos, cell_size)
 
-    D_e_scale = cfg.bond_de_scale
-    k         = cfg.bond_spring_constant
-    v_thresh  = cfg.bond_velocity_threshold
+    # Pauling formula → kJ/mol → sim energy via bond_energy_scale (issue #11
+    # — this remaining scale is just a unit conversion, real chemistry sits
+    # in pauling_bond_energy_kjmol).
+    E_scale  = cfg.bond_energy_scale
+    k        = cfg.bond_spring_constant
+    v_thresh = cfg.bond_velocity_threshold
 
     ionized = world.ionized
 
@@ -147,7 +151,9 @@ def _form_bonds(world) -> None:
             if rel_v > v_thresh:
                 continue
 
-            D_e = D_e_scale * (elem_i.de_relative * elem_j.de_relative) ** 0.5
+            # Pauling: D(A-B) = √(D_AA · D_BB) + 96·(χ_A − χ_B)²  [kJ/mol]
+            D_kjmol = pauling_bond_energy_kjmol(elem_i, elem_j)
+            D_e     = E_scale * D_kjmol           # sim energy units
             if D_e < 1e-12:
                 continue
 

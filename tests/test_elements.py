@@ -31,11 +31,17 @@ class TestElementTable:
             assert elem.Z > 0
             assert elem.mass > 0
             assert elem.covalent_radius > 0
-            assert 0.0 <= elem.de_relative
+            assert 0.0 <= elem.bond_dissociation_self    # kJ/mol, ≥0
+            assert 0.0 <= elem.ionization_energy         # eV
             r, g, b = elem.color
             assert 0.0 <= r <= 1.0
             assert 0.0 <= g <= 1.0
             assert 0.0 <= b <= 1.0
+
+    def test_noble_gases_have_no_self_bond(self):
+        """No covalent self-bond → D(X-X) = 0 by definition for noble gases."""
+        for sym in ('He', 'Ne', 'Ar'):
+            assert ELEMENTS[sym].bond_dissociation_self == 0.0
 
     def test_max_bonds_non_negative(self):
         for elem in ELEMENTS_LIST:
