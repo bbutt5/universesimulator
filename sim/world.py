@@ -27,7 +27,9 @@ from __future__ import annotations
 import numpy as np
 
 from sim import physics, chemistry, accretion
-from sim.elements import ELEMENTS_LIST, SYMBOL_TO_ID, Element
+from sim.elements import (
+    ELEMENTS_LIST, SYMBOL_TO_ID, Element, IONIZATION_ENERGIES_EV,
+)
 from sim.injector import Injector
 from sim.particle import Bond
 from sim.thermal import add_thermal_pressure
@@ -224,24 +226,44 @@ class World:
         self.time += dt
 
     # ------------------------------------------------------------------
-    # Ionisation — flags particles whose kinetic energy makes them plasma
+    # Ionisation — per-element thresholds from real first-IE data
+    # ------------------------------------------------------------------
+    # A particle is flagged ionised when its kinetic energy exceeds its
+    # element's measured first ionization energy (NIST), scaled by a single
+    # unit-conversion factor (eV → sim KE) set in settings.yaml. Recombination
+    # uses hysteresis: an ionised atom stays ionised until its KE drops below
+    # recombination_fraction × its ionization threshold.
+    #
+    # Why this is real physics:
+    #   - The relative difficulty of ionising different elements is determined
+    #     entirely by their measured first-IE values (NIST). Hydrogen ionises
+    #     at 13.598 eV, helium at 24.587 eV — He is genuinely ~1.8× harder.
+    #   - Only one calibration constant remains (the eV→sim-KE conversion),
+    #     and it exists only because the simulation runs in a custom time
+    #     scaling. With consistent SI units it would vanish.
     # ------------------------------------------------------------------
 
     def _update_ionization(self) -> None:
         cfg = getattr(self.cfg, 'thermal', None)
         if cfg is None:
             return
-        ion_thresh    = float(getattr(cfg, 'ionization_ke_threshold',    0.0))
-        recomb_thresh = float(getattr(cfg, 'recombination_ke_threshold', 0.0))
-        if ion_thresh <= 0.0:
+        scale    = float(getattr(cfg, 'ionization_energy_scale', 0.0))
+        recomb_f = float(getattr(cfg, 'recombination_fraction',  0.0))
+        if scale <= 0.0:
             return
 
         n = self.n
         if n == 0:
             return
 
-        ke         = 0.5 * self.masses[:n] * np.sum(self.velocities[:n] ** 2, axis=1)
-        currently  = self.ionized[:n]
-        becoming   = ke > ion_thresh
-        staying    = currently & (ke > recomb_thresh)   # hysteresis
+        ke = 0.5 * self.masses[:n] * np.sum(self.velocities[:n] ** 2, axis=1)
+
+        # Per-particle ionization thresholds from real measured IE data
+        ion_e_ev      = IONIZATION_ENERGIES_EV[self.elem_ids[:n]]
+        ion_thresh    = ion_e_ev * scale
+        recomb_thresh = ion_thresh * recomb_f
+
+        currently = self.ionized[:n]
+        becoming  = ke > ion_thresh
+        staying   = currently & (ke > recomb_thresh)
         self.ionized[:n] = becoming | staying

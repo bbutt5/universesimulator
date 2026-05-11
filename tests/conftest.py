@@ -36,9 +36,12 @@ def cfg():
             'pressure_cutoff': 200.0,
             'vdw_strength': 25.0,
             'vdw_cutoff':   300.0,
-            'ionization_ke_threshold':    100000.0,
-            'recombination_ke_threshold': 10000.0,
-            'plasma_repulsion_factor':    2.0,
+            # Scale chosen so H ionises at KE = 13.598 × 7355 ≈ 100k sim units,
+            # matching the pre-physicalisation test calibration. He's threshold
+            # is now 24.587 × 7355 ≈ 181k, automatically — real NIST physics.
+            'ionization_energy_scale': 7355.0,
+            'recombination_fraction':  0.1,
+            'plasma_repulsion_factor': 2.0,
         },
         'chemistry': {
             'bond_formation_factor': 1.4,
