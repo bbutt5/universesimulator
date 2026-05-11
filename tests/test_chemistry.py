@@ -160,21 +160,33 @@ class TestFusion:
         assert w.n == 2   # no fusion
         assert w.total_fusions == 0
 
-    def test_elements_without_product_in_table_do_not_fuse(self, cfg):
-        """C+C clears its Coulomb barrier easily at high KE, but our reaction
-        table has no C+C → ? entry (until task #4 derives products from
-        Q-values), so no fusion event happens."""
-        cfg.chemistry.coulomb_barrier_scale = 1.0
+    def test_carbon_carbon_fuses_to_magnesium(self, cfg):
+        """C+C → Mg-24 is real stellar carbon-burning (Burbidge et al. 1957).
+        The Z+A search routes (Z=12, A=24) to Mg-24, which is in the table."""
+        cfg.chemistry.coulomb_barrier_scale = 1.0    # trivial barrier in tests
         w = World(cfg)
 
         r_eq = ELEMENTS['C'].covalent_radius * 2
         speed = 5000.0
-        _place(w, 'C', [0.0, 0.0, 0.0], vel=[ speed, 0.0, 0.0])
-        _place(w, 'C', [r_eq * 1.5, 0.0, 0.0], vel=[-speed, 0.0, 0.0])
+        _place(w, 'C', [0.0,         0.0, 0.0], vel=[ speed, 0.0, 0.0])
+        _place(w, 'C', [r_eq * 1.5,  0.0, 0.0], vel=[-speed, 0.0, 0.0])
 
         chemistry._fuse(w)
 
-        assert w.n == 2   # no product → no event
+        assert w.n == 1
+        from sim.elements import ELEMENTS_LIST
+        assert ELEMENTS_LIST[w.elem_ids[0]].symbol == 'Mg'
+
+    def test_pair_with_no_isotope_match_does_not_fuse(self, cfg):
+        """H + Fe → (Z=27, A=57). No element with that (Z, A) in our table,
+        and the β⁺ branches don't recover anything either → no fusion."""
+        cfg.chemistry.coulomb_barrier_scale = 1.0
+        w = World(cfg)
+        r = ELEMENTS['H'].covalent_radius + ELEMENTS['Fe'].covalent_radius
+        _place(w, 'H',  [0.0,       0.0, 0.0], vel=[ 5000.0, 0.0, 0.0])
+        _place(w, 'Fe', [r * 1.5,   0.0, 0.0], vel=[-5000.0, 0.0, 0.0])
+        chemistry._fuse(w)
+        assert w.n == 2
 
 
 class TestRadiationKick:

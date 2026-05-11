@@ -44,6 +44,11 @@ it would vanish.
 from __future__ import annotations
 import numpy as np
 
+# Lazy import to avoid circular dependency at module load
+def _isotopes_by_za():
+    from sim.elements import ISOTOPES_BY_ZA
+    return ISOTOPES_BY_ZA
+
 # Nuclear-radius scaling constant. Empirical value from electron-scattering
 # experiments on stable nuclei. Krane, "Introductory Nuclear Physics" §3.1.
 _R0_FM = 1.2
@@ -70,6 +75,79 @@ def fusion_q_amu(m_a: float, m_b: float, m_product: float) -> float:
         Si + Si → Fe : Q = +17.6  MeV
     """
     return m_a + m_b - m_product
+
+
+# ---------------------------------------------------------------------------
+# Fusion product search — emergent routing, no hand-curated table
+# ---------------------------------------------------------------------------
+# Strategy:
+#   1. Strict Z and A conservation first: search for an element with
+#      Z = Z₁+Z₂ and A = A₁+A₂.
+#   2. If that product is unavailable (or energetically forbidden), allow
+#      β⁺ branches in which 1 or 2 positrons + neutrinos are emitted.
+#      Each positron carries away one unit of positive charge, so the
+#      product Z drops by ``delta_z`` while A is preserved.
+#         delta_z = 1  :  pp-chain step 1 (H + H → D + e⁺ + ν)
+#         delta_z = 2  :  silicon burning net (Si + Si → Ni-56 → Fe-56 + 2β⁺)
+#   3. Among all feasible products (Z conserved or up to 2 β⁺ branches),
+#      pick the one with the largest Q (most exothermic). Reject any
+#      where rel_KE + Q < 0 — that violates energy conservation.
+#
+# This is *emergent routing*: any pair of nuclei in the table can fuse if
+# a product exists with the right (Z, A) and the energetics allow. The
+# previous hand-curated FUSION_REACTIONS dict has been removed.
+
+def find_fusion_product(
+    z1: int, a1: int,
+    z2: int, a2: int,
+    m_a: float, m_b: float,
+    rel_ke: float,
+    q_scale: float,
+    max_beta_plus: int = 2,
+) -> tuple[object, float]:
+    """Return (Element, Q_amu) for the best fusion product, or (None, 0.0).
+
+    All arguments use the simulator's units convention: nucleon counts as
+    integers, masses in amu, kinetic energy in sim KE units, q_scale
+    converts amu → sim KE.
+
+    The "best" product is the one with the largest Q-value that satisfies
+    energy conservation (rel_KE + Q · scale ≥ 0).  Direct Z/A conservation
+    is preferred (smaller delta_z); β⁺ branches are considered only when
+    no direct product exists or the direct product is energetically
+    forbidden.
+    """
+    isotopes = _isotopes_by_za()
+    z_total = int(z1 + z2)
+    a_total = int(a1 + a2)
+
+    best_q = -float('inf')
+    best_elem = None
+    best_delta_z = -1
+
+    for delta_z in range(max_beta_plus + 1):
+        z_try = z_total - delta_z
+        elem  = isotopes.get((z_try, a_total))
+        if elem is None:
+            continue
+        q_amu = m_a + m_b - elem.mass
+        # Energy conservation: kinetic energy must compensate any
+        # endothermic mass defect
+        if rel_ke + q_amu * q_scale < 0.0:
+            continue
+        # Prefer most exothermic (highest Q). Break ties by smallest delta_z.
+        better = (
+            q_amu > best_q
+            or (q_amu == best_q and (best_delta_z < 0 or delta_z < best_delta_z))
+        )
+        if better:
+            best_q = q_amu
+            best_elem = elem
+            best_delta_z = delta_z
+
+    if best_elem is None:
+        return None, 0.0
+    return best_elem, best_q
 
 
 def coulomb_barrier_sim(

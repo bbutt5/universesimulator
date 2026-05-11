@@ -12,9 +12,29 @@ import numpy as np
 import pytest
 
 from sim.world import World
-from sim.elements import ELEMENTS, ELEMENTS_LIST, fusion_product, FUSION_REACTIONS
-from sim.nuclear import fusion_q_amu, AMU_TO_MEV
+from sim.elements import ELEMENTS, ELEMENTS_LIST, fusion_product
+from sim.nuclear import fusion_q_amu, find_fusion_product, AMU_TO_MEV
 from sim import chemistry
+
+
+# Canonical reaction set we expect the search to recover. These are the
+# stellar-nucleosynthesis channels the simulator should reproduce; the
+# search is implementation, the channels here are the physics.
+CANONICAL_REACTIONS = [
+    (('H',  'H'),  'D'),     # pp-chain step 1 (β⁺ν branch)
+    (('H',  'D'),  'He3'),   # pp-chain step 2
+    (('D',  'D'),  'He'),    # D-D fusion
+    (('Be8','He'), 'C'),     # triple-α completion
+    (('C',  'He'), 'O'),     # α capture
+    (('O',  'He'), 'Ne'),
+    (('Ne', 'He'), 'Mg'),
+    (('Mg', 'He'), 'Si'),
+    (('Si', 'He'), 'S'),
+    (('S',  'He'), 'Ar'),
+    (('Ar', 'He'), 'Ca'),
+    (('Ca', 'He'), 'Ti'),
+    (('Si', 'Si'), 'Fe'),    # Si burning (2 β⁺ branches)
+]
 
 
 def _place(world, sym: str, pos, vel=None):
@@ -137,20 +157,87 @@ class TestQValueGate:
 
 
 class TestHandbookCorroboration:
-    """Spot-check: every reaction in FUSION_REACTIONS has a sensible Q-value
-    (typically positive, except the known Be-8 resonance step). No reaction
-    should be more than ~30 MeV — that would indicate a mass-table error."""
+    """Spot-check: every canonical stellar reaction has a sensible Q-value.
+    Endothermic reactions should be small (Be-8 is −0.1 MeV); exothermic
+    should not exceed ~25 MeV (D+D is the upper)."""
 
-    def test_no_reaction_yields_implausible_q(self):
-        for key, prod in FUSION_REACTIONS.items():
-            syms = list(key)
-            if len(syms) == 1:
-                syms = [syms[0], syms[0]]
-            a, b = ELEMENTS[syms[0]], ELEMENTS[syms[1]]
-            p = ELEMENTS[prod]
-            q_mev = (a.mass + b.mass - p.mass) * AMU_TO_MEV
-            # Q-values should fit comfortably in [−1 MeV, +30 MeV] range.
-            # Endothermic ≤ 1 MeV (Be-8 resonance is the only negative case)
-            # and exothermic releases ≤ ~25 MeV (D+D is the upper).
-            assert -1.0 < q_mev < 30.0, \
-                f'{syms[0]} + {syms[1]} → {prod} gives implausible Q = {q_mev:.2f} MeV'
+    @pytest.mark.parametrize("reactants, product", CANONICAL_REACTIONS)
+    def test_canonical_reaction_q_is_plausible(self, reactants, product):
+        a, b = ELEMENTS[reactants[0]], ELEMENTS[reactants[1]]
+        p    = ELEMENTS[product]
+        q_mev = (a.mass + b.mass - p.mass) * AMU_TO_MEV
+        # Endothermic ≤ 1 MeV; exothermic ≤ 30 MeV
+        assert -1.0 < q_mev < 30.0, \
+            f'{reactants[0]} + {reactants[1]} → {product} gives Q = {q_mev:.2f} MeV'
+
+
+class TestEmergentSearch:
+    """Validate that find_fusion_product reproduces the stellar chain
+    without any hand-curated reaction table."""
+
+    @pytest.mark.parametrize("reactants, expected_product", CANONICAL_REACTIONS)
+    def test_canonical_reaction_recovered_by_search(self, reactants, expected_product):
+        """The Z+A-conservation search must find each canonical product
+        as the highest-Q feasible channel."""
+        a, b = ELEMENTS[reactants[0]], ELEMENTS[reactants[1]]
+        elem, _q = find_fusion_product(
+            a.Z, a.A, b.Z, b.A, a.mass, b.mass,
+            rel_ke=1e9, q_scale=1.0,    # plenty of KE to clear any endothermic gate
+        )
+        assert elem is not None, f'No product found for {reactants[0]} + {reactants[1]}'
+        assert elem.symbol == expected_product
+
+    def test_unreachable_pair_returns_none(self):
+        """H + Fe — Z=27, A=57; no element with that Z/A in the table
+        (Co is missing). Even with a β⁺ branch, Z=26 A=57 ≠ Fe-56."""
+        h, fe = ELEMENTS['H'], ELEMENTS['Fe']
+        elem, _q = find_fusion_product(
+            h.Z, h.A, fe.Z, fe.A, h.mass, fe.mass,
+            rel_ke=1e9, q_scale=1.0,
+        )
+        assert elem is None
+
+    def test_endothermic_blocked_at_zero_ke(self):
+        """He + He → Be8 has Q = −0.092 MeV. At rel_KE = 0 it should be
+        rejected by the energy-conservation gate."""
+        he = ELEMENTS['He']
+        elem, q = find_fusion_product(
+            he.Z, he.A, he.Z, he.A, he.mass, he.mass,
+            rel_ke=0.0, q_scale=1.0,
+        )
+        assert elem is None
+
+    def test_endothermic_allowed_with_enough_ke(self):
+        """Same pair, but with rel_KE >> |Q| → Be-8 forms."""
+        he = ELEMENTS['He']
+        elem, q = find_fusion_product(
+            he.Z, he.A, he.Z, he.A, he.mass, he.mass,
+            rel_ke=1.0, q_scale=1.0,     # 1 sim_KE >> 0.0001 amu deficit
+        )
+        assert elem is not None
+        assert elem.symbol == 'Be8'
+
+    def test_carbon_burning_emerges(self):
+        """C + C → Mg-24 is real stellar carbon-burning. Should appear from
+        the search even though it was never in the hand-curated table."""
+        c = ELEMENTS['C']
+        elem, q_amu = find_fusion_product(
+            c.Z, c.A, c.Z, c.A, c.mass, c.mass,
+            rel_ke=1e9, q_scale=1.0,
+        )
+        assert elem is not None
+        assert elem.symbol == 'Mg'                    # Z=12, A=24
+        # Real C-12 + C-12 → Mg-24 + γ has Q ≈ 13.93 MeV
+        assert q_amu * AMU_TO_MEV == pytest.approx(13.93, abs=0.1)
+
+    def test_oxygen_burning_emerges(self):
+        """O + O → S-32 is real oxygen-burning. Same point as above."""
+        o = ELEMENTS['O']
+        elem, q_amu = find_fusion_product(
+            o.Z, o.A, o.Z, o.A, o.mass, o.mass,
+            rel_ke=1e9, q_scale=1.0,
+        )
+        assert elem is not None
+        assert elem.symbol == 'S'                     # Z=16, A=32
+        # Real O-16 + O-16 → S-32 + γ has Q ≈ 16.54 MeV
+        assert q_amu * AMU_TO_MEV == pytest.approx(16.54, abs=0.1)

@@ -105,7 +105,11 @@ class TestFusionProduct:
         assert fusion_product('Fe', 'Fe') is None
         assert fusion_product('H', 'Fe') is None
 
-    def test_all_products_are_in_element_table(self):
-        from sim.elements import FUSION_REACTIONS
-        for product in FUSION_REACTIONS.values():
-            assert product in ELEMENTS, f'Fusion product {product!r} missing from ELEMENTS'
+    def test_carbon_burning_emergent(self):
+        """C + C → Mg-24 is real stellar carbon-burning. It wasn't in the
+        old hand-curated table; the search-based routing finds it."""
+        assert fusion_product('C', 'C') == 'Mg'
+
+    def test_oxygen_burning_emergent(self):
+        """O + O → S-32 (oxygen-burning)."""
+        assert fusion_product('O', 'O') == 'S'

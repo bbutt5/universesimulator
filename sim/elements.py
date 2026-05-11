@@ -116,6 +116,14 @@ ISOTOPE_MASSES_AMU: np.ndarray = np.array(
     [e.mass for e in ELEMENTS_LIST], dtype=np.float64,
 )
 
+# (Z, A) → Element lookup for the fusion product-search code in
+# sim/nuclear.find_fusion_product. Avoids the previous hand-curated
+# FUSION_REACTIONS table; products are now found by Z+A conservation
+# (with optional β⁺ branches) rather than a fixed routing.
+ISOTOPES_BY_ZA: dict[tuple[int, int], Element] = {
+    (e.Z, e.A): e for e in ELEMENTS_LIST
+}
+
 
 def get(symbol: str) -> Element | None:
     return ELEMENTS.get(symbol)
@@ -156,39 +164,39 @@ def pauling_bond_energy_kjmol(a: Element, b: Element) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Nuclear fusion reaction routing — which product nucleus forms from which
-# pair of reactants. Each entry is a (Z, A)-conserving identification of the
-# dominant fusion channel observed in stellar nucleosynthesis. The actual
-# energy released (Q-value) is computed from the *measured* AME 2020 isotope
-# masses of the reactants and product (see sim/nuclear.fusion_q_amu) — it
-# is real physics, not chosen. The routing below merely picks which product
-# isotope the channel maps to.
-#
-# Scientific basis (Burbidge, Burbidge, Fowler & Hoyle 1957):
-#   pp-chain:      H + H → D (β⁺ν),  H + D → ³He,  D + D → ⁴He
-#   Triple-alpha:  ⁴He + ⁴He → ⁸Be*,  ⁸Be + ⁴He → ¹²C  (Be-8 is transient)
-#   α-capture:     ¹²C(α,γ)¹⁶O → ²⁰Ne → ²⁴Mg → ²⁸Si → ³²S → ³⁶Ar → ⁴⁰Ca → ⁴⁸Ti
-#   Si burning:    ²⁸Si + ²⁸Si → ⁵⁶Ni → ⁵⁶Fe  (end of exothermic chain)
+# Nuclear fusion product routing
 # ---------------------------------------------------------------------------
-FUSION_REACTIONS: dict[frozenset, str] = {
-    frozenset({'H',  'H'}):  'D',     # pp-chain step 1 (positron+neutrino emitted)
-    frozenset({'H',  'D'}):  'He3',   # pp-chain step 2 → He-3
-    frozenset({'D',  'D'}):  'He',    # D+D → ⁴He (with neutron emission)
-    frozenset({'He', 'He'}): 'Be8',   # ⁸Be — transient resonance state
-    frozenset({'Be8', 'He'}): 'C',     # Be-8 + α → ¹²C, completing triple-α
-    frozenset({'C',  'He'}): 'O',
-    frozenset({'O',  'He'}): 'Ne',
-    frozenset({'Ne', 'He'}): 'Mg',
-    frozenset({'Mg', 'He'}): 'Si',
-    frozenset({'Si', 'He'}): 'S',
-    frozenset({'S',  'He'}): 'Ar',
-    frozenset({'Ar', 'He'}): 'Ca',
-    frozenset({'Ca', 'He'}): 'Ti',
-    frozenset({'Si', 'Si'}): 'Fe',
-}
-
+# The previous hand-curated FUSION_REACTIONS dict has been removed.  The
+# actual product of a fusion event is now computed by
+# ``sim.nuclear.find_fusion_product`` from real conservation laws:
+#
+#   * Strict (Z, A) conservation first.
+#   * β⁺ branches (Z drops by 1 or 2 via positron emission) considered
+#     if the direct product is missing or forbidden by energy
+#     conservation (rel_KE + Q ≥ 0).
+#   * Among feasible products, the most exothermic Q wins.
+#
+# The chain that emerges from this for the elements currently in the
+# table is essentially the textbook stellar-nucleosynthesis sequence
+# (Burbidge, Burbidge, Fowler & Hoyle 1957) plus a few extra channels
+# (e.g. C+C → Mg, O+O → S) — which are real reactions observed in
+# carbon- and oxygen-burning stages.
 
 def fusion_product(sym1: str, sym2: str) -> str | None:
-    """Return product symbol if these two elements can fuse, else None."""
-    key = frozenset({sym1, sym2})
-    return FUSION_REACTIONS.get(key)
+    """Return the conventional product symbol for sym1 + sym2, or None.
+
+    This is the *routing* — the most-exothermic (Z, A)-conserving product
+    that exists in the periodic table, allowing β⁺ branches. Q-value
+    sign is **not** gated here; a pair whose direct product is endothermic
+    (e.g. He+He → Be-8) still returns its routing symbol, because in real
+    stars enough kinetic energy can compensate. The kinetics-aware
+    version used by the simulator is
+    ``sim.nuclear.find_fusion_product(..., rel_ke=...)``.
+    """
+    from sim.nuclear import find_fusion_product
+    a, b = ELEMENTS[sym1], ELEMENTS[sym2]
+    elem, _q = find_fusion_product(
+        a.Z, a.A, b.Z, b.A, a.mass, b.mass,
+        rel_ke=float('inf'), q_scale=1.0,    # disable energy gate
+    )
+    return elem.symbol if elem is not None else None

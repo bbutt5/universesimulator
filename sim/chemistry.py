@@ -38,11 +38,11 @@ from __future__ import annotations
 import numpy as np
 
 from sim.elements import (
-    ELEMENTS, ELEMENTS_LIST, fusion_product,
+    ELEMENTS, ELEMENTS_LIST,
     ATOMIC_NUMBERS_Z, MASS_NUMBERS_A,
     pauling_bond_energy_kjmol,
 )
-from sim.nuclear import coulomb_barriers_matrix, fusion_q_amu
+from sim.nuclear import coulomb_barriers_matrix, find_fusion_product
 from sim.particle import Bond
 from sim.spatial import build_grid, neighbors
 
@@ -232,11 +232,7 @@ def _fuse(world) -> None:
     used:   set[int] = set()
     events: list[tuple[int, int, str]] = []
 
-    # Unit conversion from amu to sim energy units. The same conversion is
-    # used implicitly elsewhere (KE has units of sim_energy = amu · v²).
-    # Q comes out in amu; ½μv² is in amu·(SU/s)² → so we treat them as
-    # consistent simulation units. The physics check is the *sign*: a
-    # reaction with Q + rel_KE ≥ 0 is allowed by energy conservation.
+    # Q-value unit conversion (amu → sim KE) for energy-conservation gate.
     q_scale_sim_per_amu = float(getattr(cfg, 'q_value_scale', 1.0))
 
     for h in over_barrier:
@@ -246,21 +242,22 @@ def _fuse(world) -> None:
             continue
         elem_i = ELEMENTS_LIST[world.elem_ids[i]]
         elem_j = ELEMENTS_LIST[world.elem_ids[j]]
-        prod   = fusion_product(elem_i.symbol, elem_j.symbol)
-        if prod is None or prod not in ELEMENTS:
-            continue   # no product in our routing
-        prod_elem = ELEMENTS[prod]
 
-        # Real Q-value from measured isotope masses (AME 2020). Then enforce
-        # *energy conservation*: rel_KE + Q ≥ 0. Exothermic Q > 0 always
-        # allowed; endothermic Q < 0 needs enough kinetic energy to pay.
-        q_amu     = fusion_q_amu(elem_i.mass, elem_j.mass, prod_elem.mass)
-        q_sim     = q_amu * q_scale_sim_per_amu
-        ke_pair   = float(rel_ke[h])
-        if ke_pair + q_sim < 0.0:
-            continue   # forbidden — not enough KE to compensate endothermic Q
+        # Emergent product routing: find the (Z, A)-conserving product with
+        # the largest Q that satisfies rel_KE + Q ≥ 0. β⁺ branches (Z-1, Z-2)
+        # are allowed for reactions like H+H → D and Si+Si → Fe that emit
+        # positrons in nature. No FUSION_REACTIONS lookup table — the product
+        # falls out of conservation laws and measured isotope masses.
+        prod_elem, _q_amu = find_fusion_product(
+            elem_i.Z, elem_i.A, elem_j.Z, elem_j.A,
+            elem_i.mass, elem_j.mass,
+            rel_ke=float(rel_ke[h]),
+            q_scale=q_scale_sim_per_amu,
+        )
+        if prod_elem is None:
+            continue   # no allowed product
 
-        events.append((i, j, prod))
+        events.append((i, j, prod_elem.symbol))
         used.add(i)
         used.add(j)
 
