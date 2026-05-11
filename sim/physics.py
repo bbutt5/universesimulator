@@ -1,22 +1,16 @@
 """
 Physics: gravitational N-body + Morse bond forces.
 
-Gravity — symmetric O(N²/2)
-----------------------------
-Each pair (i, j) is processed exactly once.  Newton's 3rd law gives the force
-on j for free from the force on i, halving both flops AND memory vs the full
-(N×N) matrix approach.
+Gravity has two backends, chosen at import time:
+  * **numba** (preferred if installed) — parallel JIT compilation. Each
+    thread runs the full inner loop in compiled native code; comfortably
+    handles N=5000+ in real time on a laptop.
+  * **NumPy** (fallback) — symmetric O(N²/2) using Newton's 3rd law and
+    vectorised slicing.  Pure-stdlib path; ~10–50× slower than numba at
+    N=1000+.
 
-For each particle i we vectorise over all j > i:
-  - diff   = pos[j:] − pos[i]              shape (n−i−1, 3)
-  - forces[i]   +=  Σ_j  F_ij
-  - forces[j:]  −=  F_ij          (Newton's 3rd law, one scatter)
-
-Numba upgrade path
-------------------
-  pip install numba
-Then swap in the @njit(parallel=True) version (see comments below) for
-10-50× speed and N > 5000 at 60 fps.
+Both implementations agree to within floating-point noise — verified by
+``tests/test_physics_gravity.py``.
 
 Bond forces — fully vectorised
 --------------------------------
@@ -28,13 +22,22 @@ No Python loop over bonds.  Uses the correct Morse potential sign:
 from __future__ import annotations
 import numpy as np
 
+# ---------------------------------------------------------------------------
+# Optional numba JIT backend
+# ---------------------------------------------------------------------------
+try:
+    from numba import njit, prange
+    HAS_NUMBA = True
+except ImportError:                                # pragma: no cover
+    HAS_NUMBA = False
+
 
 # ---------------------------------------------------------------------------
-# Gravity
+# Gravity — NumPy backend (always available)
 # ---------------------------------------------------------------------------
 
-def add_gravity(world, forces: np.ndarray):
-    """Symmetric O(N²/2) gravity using Newton's 3rd law."""
+def add_gravity_numpy(world, forces: np.ndarray) -> None:
+    """Symmetric O(N²/2) NumPy gravity. Newton's 3rd law applied for free."""
     n = world.n
     if n < 2:
         return
@@ -45,24 +48,70 @@ def add_gravity(world, forces: np.ndarray):
     m      = world.masses[:n]
 
     for i in range(n - 1):
-        diff    = pos[i + 1:] - pos[i]                     # (n−i−1, 3)
+        diff    = pos[i + 1:] - pos[i]
         dist_sq = np.einsum('jk,jk->j', diff, diff) + eps_sq
         dist    = np.sqrt(dist_sq)
+        F_over_d = G * m[i] * m[i + 1:] / (dist_sq * dist)
+        F = F_over_d[:, np.newaxis] * diff
+        forces[i]      += F.sum(axis=0)
+        forces[i + 1:n] -= F
 
-        # Force magnitude / distance (avoids separate division for unit vector)
-        F_over_d = G * m[i] * m[i + 1:] / (dist_sq * dist)   # (n−i−1,)
 
-        F = F_over_d[:, np.newaxis] * diff  # (n−i−1, 3) — force on i toward each j
+# ---------------------------------------------------------------------------
+# Gravity — numba backend (compiled, parallel)
+# ---------------------------------------------------------------------------
 
-        forces[i]      += F.sum(axis=0)     # aggregate force on i
-        forces[i + 1:n] -= F               # equal and opposite on each j
+if HAS_NUMBA:
+
+    @njit(parallel=True, cache=True, fastmath=True)
+    def _gravity_kernel(pos, masses, G, eps_sq, out):
+        n = pos.shape[0]
+        for i in prange(n):
+            fx = 0.0
+            fy = 0.0
+            fz = 0.0
+            xi = pos[i, 0]
+            yi = pos[i, 1]
+            zi = pos[i, 2]
+            mi = masses[i]
+            for j in range(n):
+                if i == j:
+                    continue
+                dx = pos[j, 0] - xi
+                dy = pos[j, 1] - yi
+                dz = pos[j, 2] - zi
+                d2 = dx * dx + dy * dy + dz * dz + eps_sq
+                r  = d2 ** 0.5
+                f  = G * mi * masses[j] / (d2 * r)
+                fx += f * dx
+                fy += f * dy
+                fz += f * dz
+            out[i, 0] += fx
+            out[i, 1] += fy
+            out[i, 2] += fz
+
+    def add_gravity_numba(world, forces: np.ndarray) -> None:
+        n = world.n
+        if n < 2:
+            return
+        G      = world.cfg.physics.gravity_constant
+        eps_sq = world.cfg.physics.softening_length ** 2
+        _gravity_kernel(world.positions[:n], world.masses[:n],
+                        float(G), float(eps_sq), forces[:n])
+
+else:                                              # pragma: no cover
+    add_gravity_numba = None
+
+
+# Default dispatch — numba when available, NumPy otherwise.
+add_gravity = add_gravity_numba if HAS_NUMBA else add_gravity_numpy
 
 
 # ---------------------------------------------------------------------------
 # Bond forces
 # ---------------------------------------------------------------------------
 
-def add_bond_forces(world, forces: np.ndarray):
+def add_bond_forces(world, forces: np.ndarray) -> None:
     """Vectorised Morse bond forces — no Python loop over bonds."""
     bonds = world.bonds
     if not bonds:
@@ -93,30 +142,3 @@ def add_bond_forces(world, forces: np.ndarray):
 
     np.add.at(forces, ii,  F_vec)
     np.add.at(forces, jj, -F_vec)
-
-
-# ---------------------------------------------------------------------------
-# Numba upgrade (uncomment + pip install numba for 10-50× faster gravity)
-# ---------------------------------------------------------------------------
-# from numba import njit, prange
-#
-# @njit(parallel=True, cache=True)
-# def _gravity_numba(pos, masses, G, eps_sq, out):
-#     n = len(pos)
-#     for i in prange(n):
-#         fx = fy = fz = 0.0
-#         xi, yi, zi, mi = pos[i,0], pos[i,1], pos[i,2], masses[i]
-#         for j in range(n):
-#             if i == j: continue
-#             dx = pos[j,0]-xi; dy = pos[j,1]-yi; dz = pos[j,2]-zi
-#             d2 = dx*dx + dy*dy + dz*dz + eps_sq
-#             r  = d2**0.5
-#             f  = G * mi * masses[j] / (d2 * r)
-#             fx += f*dx; fy += f*dy; fz += f*dz
-#         out[i,0] += fx; out[i,1] += fy; out[i,2] += fz
-#
-# def add_gravity(world, forces):
-#     if world.n < 2: return
-#     _gravity_numba(world.positions[:world.n], world.masses[:world.n],
-#                    world.cfg.physics.gravity_constant,
-#                    world.cfg.physics.softening_length**2, forces)

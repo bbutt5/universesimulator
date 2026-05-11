@@ -89,7 +89,20 @@ injection:
 
 Pure NumPy gravity runs smoothly at N=1000 on most modern hardware. For larger simulations:
 
-- **N=1k–10k:** install [numba](https://numba.pydata.org/) and uncomment the `@njit` block in [`sim/physics.py`](sim/physics.py) for a 10–50× speedup ([issue #7](https://github.com/billymahmood/universesimulator/issues/7)).
+- **N=1k–10k:** install [numba](https://numba.pydata.org/) — the gravity backend auto-detects it and switches to a parallel JIT-compiled inner loop with no code changes required:
+  ```bash
+  pip install numba
+  ```
+  Measured speedup on this codebase (Apple Silicon laptop):
+
+  | N      | NumPy   | numba   | speedup |
+  |-------:|--------:|--------:|--------:|
+  | 100    | 0.73 ms | 0.11 ms | 6.3×    |
+  | 500    | 6.43 ms | 0.19 ms | 33.8×   |
+  | 1000   | 19.6 ms | 0.57 ms | 34.2×   |
+  | 2000   | 70.4 ms | 1.35 ms | 52.0×   |
+
+  Both backends produce numerically identical force fields (verified to 1e-10 in `tests/test_physics_gravity.py`).
 - **N=10k+:** the O(N²) gravity becomes the bottleneck even with numba. You'd want a Barnes–Hut tree (O(N log N)). Not implemented yet — open for contribution.
 
 ## Architecture

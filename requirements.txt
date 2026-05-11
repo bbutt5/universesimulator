@@ -3,3 +3,7 @@ vispy>=0.14.0
 PyYAML>=6.0
 PyOpenGL>=3.1.0
 pyglfw>=2.6.0
+# Optional: numba accelerates the gravity inner loop ~30–50× at N>=1000.
+# The simulator runs fine without it (NumPy fallback used automatically);
+# install for larger N.
+#   pip install numba

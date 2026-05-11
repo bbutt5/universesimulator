@@ -207,18 +207,29 @@ class World:
         # 4. Velocity-Verlet second half: v(t+dt) = v(t) + ½(a_old+a_new)·dt
         vel += 0.5 * ((f_prev + f_cur) / m[:, np.newaxis]) * dt
 
-        # 5. Clamp velocity
-        # NOTE: This is a numerical band-aid, not physics. Rescaling a
-        # particle's velocity magnitude silently destroys momentum
-        # conservation; we count every clamp so the user can see if it's
-        # firing too often (= integrator instability, dt too large, or
-        # softening too small).
-        v_max    = self.cfg.physics.max_velocity
-        speeds   = np.linalg.norm(vel, axis=1, keepdims=True)
-        too_fast = speeds > v_max
-        if np.any(too_fast):
-            self.total_velocity_clamps += int(np.count_nonzero(too_fast))
-            vel[too_fast[:, 0]] *= v_max / speeds[too_fast[:, 0]]
+        # 5. Soft velocity saturation
+        # Replaces the previous hard cap. New rule (continuous, C¹ smooth):
+        #
+        #     |v_new| = v_max · tanh(|v| / v_max)
+        #
+        # which is identity for |v|=0, ~0.76·v_max at |v|=v_max, asymptotes
+        # to v_max for |v|→∞.  Direction is preserved, so any "clamp" still
+        # affects only magnitude (momentum is no longer conserved exactly
+        # for fast particles — same theoretical issue as the hard cap, but
+        # the discontinuity in dynamics is gone). The counter below tracks
+        # particles whose unfiltered speed exceeded v_max — i.e. those that
+        # would have been hard-clamped under the old rule — so HUD diagnostic
+        # continuity is preserved.
+        v_max  = float(self.cfg.physics.max_velocity)
+        speeds = np.linalg.norm(vel, axis=1)
+        would_clamp = speeds > v_max
+        if np.any(would_clamp):
+            self.total_velocity_clamps += int(np.count_nonzero(would_clamp))
+        # ratio = |v_new| / |v| ; guard the |v|→0 limit explicitly
+        ratio = np.where(speeds > 1e-12,
+                         v_max * np.tanh(speeds / v_max) / np.where(speeds > 1e-12, speeds, 1.0),
+                         1.0)
+        vel *= ratio[:, np.newaxis]
 
         # 6. Ionisation flag update (must precede chemistry so ionised
         #    atoms drop their bonds this step)

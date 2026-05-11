@@ -112,14 +112,64 @@ class TestClampCounter:
         w = World(cfg)
         assert w.total_velocity_clamps == 0
 
-    def test_increments_when_clamp_fires(self, cfg):
+    def test_increments_when_saturation_fires(self, cfg):
         cfg.simulation.injection_rate = 0
-        cfg.physics.max_velocity = 1.0    # force the clamp to fire
+        cfg.physics.max_velocity = 1.0    # force the soft cap to fire
         w = World(cfg)
         _place(w, 'Fe', [0.0, 0.0, 0.0], vel=[100.0, 0.0, 0.0])
         _place(w, 'Fe', [50.0, 0.0, 0.0], vel=[-100.0, 0.0, 0.0])
         w.step(0.01)
         assert w.total_velocity_clamps >= 1
+
+
+class TestSoftSaturation:
+    """The velocity cap is now a smooth tanh saturation:
+        |v_new| = v_max · tanh(|v|/v_max)
+    Properties: monotonic, C¹ smooth, direction-conserving, |v_new|<v_max."""
+
+    def test_slow_particle_essentially_unaffected(self, cfg):
+        """|v| << v_max → ratio ≈ 1 (slight tanh correction only)."""
+        cfg.simulation.injection_rate = 0
+        cfg.physics.max_velocity = 1000.0
+        # Disable forces so step() doesn't change v via dynamics
+        cfg.physics.gravity_constant = 0.0
+        cfg.thermal.pressure_constant = 0.0
+        cfg.thermal.vdw_strength = 0.0
+        w = World(cfg)
+        _place(w, 'Fe', [0.0, 0.0, 0.0], vel=[10.0, 0.0, 0.0])
+        w.step(0.01)
+        # tanh(0.01) / 0.01 ≈ 0.99997, so v should be ~99.997% of 10
+        assert abs(w.velocities[0, 0] - 10.0) < 0.01
+
+    def test_huge_velocity_caps_at_v_max(self, cfg):
+        """|v| → ∞ → |v_new| ≤ v_max (tanh asymptotes; floats saturate exactly)."""
+        cfg.simulation.injection_rate = 0
+        cfg.physics.max_velocity = 5.0
+        cfg.physics.gravity_constant = 0.0
+        cfg.thermal.pressure_constant = 0.0
+        cfg.thermal.vdw_strength = 0.0
+        w = World(cfg)
+        _place(w, 'Fe', [0.0, 0.0, 0.0], vel=[10000.0, 0.0, 0.0])
+        w.step(0.01)
+        speed = float(np.linalg.norm(w.velocities[0]))
+        assert speed <= 5.0       # tanh asymptote; never exceeds
+        assert speed > 4.9        # close to v_max
+
+    def test_saturation_preserves_direction(self, cfg):
+        cfg.simulation.injection_rate = 0
+        cfg.physics.max_velocity = 1.0
+        cfg.physics.gravity_constant = 0.0
+        cfg.thermal.pressure_constant = 0.0
+        cfg.thermal.vdw_strength = 0.0
+        w = World(cfg)
+        v_in = np.array([3.0, 4.0, 12.0])   # |v| = 13, all components > 0
+        _place(w, 'Fe', [0.0, 0.0, 0.0], vel=v_in.tolist())
+        w.step(0.01)
+        v_out = w.velocities[0]
+        # Direction (unit vector) should be unchanged
+        u_in  = v_in  / np.linalg.norm(v_in)
+        u_out = v_out / np.linalg.norm(v_out)
+        np.testing.assert_allclose(u_in, u_out, atol=1e-12)
 
 
 class TestConservationReport:
