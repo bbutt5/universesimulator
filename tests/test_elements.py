@@ -78,13 +78,19 @@ class TestFusionProduct:
     def test_d_d_gives_helium(self):
         assert fusion_product('D', 'D') == 'He'
 
-    def test_he_he_gives_beryllium(self):
-        assert fusion_product('He', 'He') == 'Be'
+    def test_he_he_gives_beryllium_8(self):
+        """4He + 4He → 8Be — the transient resonance state, not stable Be-9."""
+        assert fusion_product('He', 'He') == 'Be8'
 
-    def test_triple_alpha_completes(self):
-        # He + Be → C
-        assert fusion_product('He', 'Be') == 'C'
-        assert fusion_product('Be', 'He') == 'C'
+    def test_triple_alpha_completes_via_be8(self):
+        """⁸Be + ⁴He → ¹²C completes the triple-α chain (real stellar
+        nucleosynthesis; Hoyle 1954)."""
+        assert fusion_product('Be8', 'He') == 'C'
+        assert fusion_product('He', 'Be8') == 'C'
+
+    def test_h_d_gives_he3(self):
+        """pp-chain step 2: ¹H + ²H → ³He (not ⁴He)."""
+        assert fusion_product('H', 'D') == 'He3'
 
     def test_alpha_capture_chain(self):
         chain = [('C', 'He', 'O'), ('O', 'He', 'Ne'), ('Ne', 'He', 'Mg'),

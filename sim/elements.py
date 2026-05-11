@@ -7,7 +7,11 @@ this file can verify each row against the standard databases.
 
 Sources
 -------
-- Atomic masses (amu):                IUPAC 2021 standard atomic weights
+- Atomic masses (amu):                Atomic Mass Evaluation 2020 (Wang et al.,
+                                      Chinese Physics C 45, 030003) — exact
+                                      dominant-isotope masses, not natural
+                                      abundance averages. Needed for accurate
+                                      nuclear Q-values.
 - Covalent radii (pm):                Cordero et al. 2008, Dalton Trans.
 - Electronegativity (Pauling scale):  Pauling 1932 / Allen revision
 - First ionization energies (eV):     NIST Atomic Spectra Database
@@ -37,7 +41,8 @@ class Element:
     symbol: str
     name: str
     Z: int                          # atomic number (proton count)
-    mass: float                     # atomic mass (amu, IUPAC 2021) — A inferred as round(mass)
+    A: int                          # mass number (nucleon count) — explicit so isotopes are unambiguous
+    mass: float                     # exact isotope mass (amu, AME 2020)
     covalent_radius: float          # pm (Cordero 2008) — used as SU directly
     electronegativity: float        # Pauling scale (0 = noble gas / not applicable)
     valence_electrons: int          # outer shell electrons
@@ -53,31 +58,41 @@ class Element:
 # Ionization energies are NIST Atomic Spectra Database first-IE values.
 # ---------------------------------------------------------------------------
 ELEMENTS: dict[str, Element] = {
-    # symbol  name            Z    mass    rc    EN    val bnd  RGB                 D(X-X)/(kJ·mol⁻¹)  IE/eV
-    'H':  Element('H',  'Hydrogen',    1,   1.008,  31, 2.20,  1,  1, (0.90, 0.90, 0.90), 436.0, 13.598),
-    'D':  Element('D',  'Deuterium',   1,   2.014,  31, 2.20,  1,  1, (0.75, 0.75, 1.00), 443.0, 13.602),
-    'He': Element('He', 'Helium',      2,   4.003,  28, 0.00,  2,  0, (0.85, 1.00, 1.00),   0.0, 24.587),
-    'Li': Element('Li', 'Lithium',     3,   6.941, 128, 0.98,  1,  1, (0.80, 0.50, 1.00), 110.0,  5.392),
-    'Be': Element('Be', 'Beryllium',   4,   9.012,  96, 1.57,  2,  2, (0.76, 1.00, 0.00), 208.0,  9.323),
-    'B':  Element('B',  'Boron',       5,  10.811,  84, 2.04,  3,  3, (1.00, 0.71, 0.71), 290.0,  8.298),
-    'C':  Element('C',  'Carbon',      6,  12.011,  77, 2.55,  4,  4, (0.50, 0.50, 0.50), 348.0, 11.260),
-    'N':  Element('N',  'Nitrogen',    7,  14.007,  71, 3.04,  5,  3, (0.19, 0.31, 0.97), 167.0, 14.534),
-    'O':  Element('O',  'Oxygen',      8,  15.999,  66, 3.44,  6,  2, (1.00, 0.13, 0.13), 146.0, 13.618),
-    'F':  Element('F',  'Fluorine',    9,  18.998,  57, 3.98,  7,  1, (0.56, 0.82, 0.56), 158.0, 17.423),
-    'Ne': Element('Ne', 'Neon',       10,  20.180,  58, 0.00,  8,  0, (0.70, 0.89, 0.96),   0.0, 21.565),
-    'Na': Element('Na', 'Sodium',     11,  22.990, 166, 0.93,  1,  1, (0.67, 0.36, 0.95),  75.0,  5.139),
-    'Mg': Element('Mg', 'Magnesium',  12,  24.305, 141, 1.31,  2,  2, (0.54, 1.00, 0.00), 130.0,  7.646),
-    'Al': Element('Al', 'Aluminum',   13,  26.982, 121, 1.61,  3,  3, (0.75, 0.65, 0.65), 186.0,  5.986),
-    'Si': Element('Si', 'Silicon',    14,  28.086, 111, 1.90,  4,  4, (0.94, 0.78, 0.63), 222.0,  8.152),
-    'P':  Element('P',  'Phosphorus', 15,  30.974, 107, 2.19,  5,  3, (1.00, 0.50, 0.00), 209.0, 10.487),
-    'S':  Element('S',  'Sulfur',     16,  32.060, 105, 2.58,  6,  2, (1.00, 1.00, 0.19), 226.0, 10.360),
-    'Cl': Element('Cl', 'Chlorine',   17,  35.453, 102, 3.16,  7,  1, (0.12, 0.94, 0.12), 242.0, 12.968),
-    'Ar': Element('Ar', 'Argon',      18,  39.948, 106, 0.00,  8,  0, (0.50, 0.82, 0.89),   0.0, 15.760),
-    'K':  Element('K',  'Potassium',  19,  39.098, 203, 0.82,  1,  1, (0.56, 0.25, 0.83),  49.0,  4.341),
-    'Ca': Element('Ca', 'Calcium',    20,  40.078, 176, 1.00,  2,  2, (0.24, 1.00, 0.00), 105.0,  6.113),
-    'Ti': Element('Ti', 'Titanium',   22,  47.867, 136, 1.54,  4,  6, (0.75, 0.76, 0.78), 158.0,  6.828),
-    'Fe': Element('Fe', 'Iron',       26,  55.845, 132, 1.83,  2,  6, (0.88, 0.40, 0.20), 118.0,  7.902),
-    'Ni': Element('Ni', 'Nickel',     28,  58.693, 124, 1.91,  2,  6, (0.31, 0.82, 0.31), 207.0,  7.640),
+    # Each entry uses the dominant isotope's mass (AME 2020). 'He3' and
+    # 'Be8' are nuclear intermediates (transients in the stellar fusion
+    # chain); they have no cosmic abundance and only appear as fusion
+    # products.
+    # symbol  name            Z   A     mass         rc    EN    val bnd  RGB                  D(X-X)/(kJ·mol⁻¹)  IE/eV
+    'H':   Element('H',   'Hydrogen',     1,  1,  1.00783,    31, 2.20,  1,  1, (0.90, 0.90, 0.90), 436.0, 13.598),
+    'D':   Element('D',   'Deuterium',    1,  2,  2.01410,    31, 2.20,  1,  1, (0.75, 0.75, 1.00), 443.0, 13.602),
+    'He3': Element('He3', 'Helium-3',     2,  3,  3.01603,    28, 0.00,  2,  0, (0.80, 1.00, 0.95),   0.0, 24.586),
+    'He':  Element('He',  'Helium-4',     2,  4,  4.00260,    28, 0.00,  2,  0, (0.85, 1.00, 1.00),   0.0, 24.587),
+    'Li':  Element('Li',  'Lithium-7',    3,  7,  7.01600,   128, 0.98,  1,  1, (0.80, 0.50, 1.00), 110.0,  5.392),
+    'Be8': Element('Be8', 'Beryllium-8',  4,  8,  8.00531,    96, 0.00,  2,  0, (1.00, 1.00, 0.50),   0.0,  9.323),
+    'Be':  Element('Be',  'Beryllium-9',  4,  9,  9.01218,    96, 1.57,  2,  2, (0.76, 1.00, 0.00), 208.0,  9.323),
+    'B':   Element('B',   'Boron-11',     5, 11, 11.00931,    84, 2.04,  3,  3, (1.00, 0.71, 0.71), 290.0,  8.298),
+    'C':   Element('C',   'Carbon-12',    6, 12, 12.00000,    77, 2.55,  4,  4, (0.50, 0.50, 0.50), 348.0, 11.260),
+    'N':   Element('N',   'Nitrogen-14',  7, 14, 14.00307,    71, 3.04,  5,  3, (0.19, 0.31, 0.97), 167.0, 14.534),
+    'O':   Element('O',   'Oxygen-16',    8, 16, 15.99491,    66, 3.44,  6,  2, (1.00, 0.13, 0.13), 146.0, 13.618),
+    'F':   Element('F',   'Fluorine-19',  9, 19, 18.99840,    57, 3.98,  7,  1, (0.56, 0.82, 0.56), 158.0, 17.423),
+    'Ne':  Element('Ne',  'Neon-20',     10, 20, 19.99244,    58, 0.00,  8,  0, (0.70, 0.89, 0.96),   0.0, 21.565),
+    'Na':  Element('Na',  'Sodium-23',   11, 23, 22.98977,   166, 0.93,  1,  1, (0.67, 0.36, 0.95),  75.0,  5.139),
+    'Mg':  Element('Mg',  'Magnesium-24',12, 24, 23.98504,   141, 1.31,  2,  2, (0.54, 1.00, 0.00), 130.0,  7.646),
+    'Al':  Element('Al',  'Aluminum-27', 13, 27, 26.98154,   121, 1.61,  3,  3, (0.75, 0.65, 0.65), 186.0,  5.986),
+    'Si':  Element('Si',  'Silicon-28',  14, 28, 27.97693,   111, 1.90,  4,  4, (0.94, 0.78, 0.63), 222.0,  8.152),
+    'P':   Element('P',   'Phosphorus-31',15, 31, 30.97376,  107, 2.19,  5,  3, (1.00, 0.50, 0.00), 209.0, 10.487),
+    'S':   Element('S',   'Sulfur-32',   16, 32, 31.97207,   105, 2.58,  6,  2, (1.00, 1.00, 0.19), 226.0, 10.360),
+    'Cl':  Element('Cl',  'Chlorine-35', 17, 35, 34.96885,   102, 3.16,  7,  1, (0.12, 0.94, 0.12), 242.0, 12.968),
+    # Ar/Ti are the alpha-chain isotopes (³⁶Ar, ⁴⁴Ti), not the natural-abundance
+    # ones (⁴⁰Ar, ⁴⁸Ti). The alpha chain Z+Z, A+A conservation requires it:
+    # S-32 + α → ³⁶Ar (Q = +6.64 MeV) and Ca-40 + α → ⁴⁴Ti (Q = +5.13 MeV).
+    # ⁴⁴Ti is unstable (T½ = 60 yr) but real stars produce it copiously.
+    'Ar':  Element('Ar',  'Argon-36',    18, 36, 35.96755,   106, 0.00,  8,  0, (0.50, 0.82, 0.89),   0.0, 15.760),
+    'K':   Element('K',   'Potassium-39',19, 39, 38.96371,   203, 0.82,  1,  1, (0.56, 0.25, 0.83),  49.0,  4.341),
+    'Ca':  Element('Ca',  'Calcium-40',  20, 40, 39.96259,   176, 1.00,  2,  2, (0.24, 1.00, 0.00), 105.0,  6.113),
+    'Ti':  Element('Ti',  'Titanium-44', 22, 44, 43.95969,   136, 1.54,  4,  6, (0.75, 0.76, 0.78), 158.0,  6.828),
+    'Fe':  Element('Fe',  'Iron-56',     26, 56, 55.93494,   132, 1.83,  2,  6, (0.88, 0.40, 0.20), 118.0,  7.902),
+    'Ni':  Element('Ni',  'Nickel-58',   28, 58, 57.93534,   124, 1.91,  2,  6, (0.31, 0.82, 0.31), 207.0,  7.640),
 }
 
 # ---------------------------------------------------------------------------
@@ -95,7 +110,10 @@ ATOMIC_NUMBERS_Z: np.ndarray = np.array(
     [e.Z for e in ELEMENTS_LIST], dtype=np.float64,
 )
 MASS_NUMBERS_A: np.ndarray = np.array(
-    [round(e.mass) for e in ELEMENTS_LIST], dtype=np.float64,
+    [e.A for e in ELEMENTS_LIST], dtype=np.float64,
+)
+ISOTOPE_MASSES_AMU: np.ndarray = np.array(
+    [e.mass for e in ELEMENTS_LIST], dtype=np.float64,
 )
 
 
@@ -138,21 +156,26 @@ def pauling_bond_energy_kjmol(a: Element, b: Element) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Nuclear fusion reaction table (phenomenological — tracked for replacement
-# in issue #11 with binding-energy Q-value calculation).
+# Nuclear fusion reaction routing — which product nucleus forms from which
+# pair of reactants. Each entry is a (Z, A)-conserving identification of the
+# dominant fusion channel observed in stellar nucleosynthesis. The actual
+# energy released (Q-value) is computed from the *measured* AME 2020 isotope
+# masses of the reactants and product (see sim/nuclear.fusion_q_amu) — it
+# is real physics, not chosen. The routing below merely picks which product
+# isotope the channel maps to.
 #
-# Scientific basis (simplified stellar nucleosynthesis chain):
-#   pp-chain:       4H → He-4   (here: H+H → D, D+D → He)
-#   Triple-alpha:   3He → C     (He+He → Be-8, Be-8+He → C)
-#   Alpha capture:  C+α → O+α → Ne+α → Mg+α → Si+α → S → Ar → Ca → Ti
-#   Silicon burning: Si + Si → Fe-56 (endpoint of exothermic fusion)
+# Scientific basis (Burbidge, Burbidge, Fowler & Hoyle 1957):
+#   pp-chain:      H + H → D (β⁺ν),  H + D → ³He,  D + D → ⁴He
+#   Triple-alpha:  ⁴He + ⁴He → ⁸Be*,  ⁸Be + ⁴He → ¹²C  (Be-8 is transient)
+#   α-capture:     ¹²C(α,γ)¹⁶O → ²⁰Ne → ²⁴Mg → ²⁸Si → ³²S → ³⁶Ar → ⁴⁰Ca → ⁴⁸Ti
+#   Si burning:    ²⁸Si + ²⁸Si → ⁵⁶Ni → ⁵⁶Fe  (end of exothermic chain)
 # ---------------------------------------------------------------------------
 FUSION_REACTIONS: dict[frozenset, str] = {
-    frozenset({'H',  'H'}):  'D',
-    frozenset({'D',  'D'}):  'He',
-    frozenset({'H',  'D'}):  'He',
-    frozenset({'He', 'He'}): 'Be',
-    frozenset({'He', 'Be'}): 'C',
+    frozenset({'H',  'H'}):  'D',     # pp-chain step 1 (positron+neutrino emitted)
+    frozenset({'H',  'D'}):  'He3',   # pp-chain step 2 → He-3
+    frozenset({'D',  'D'}):  'He',    # D+D → ⁴He (with neutron emission)
+    frozenset({'He', 'He'}): 'Be8',   # ⁸Be — transient resonance state
+    frozenset({'Be8', 'He'}): 'C',     # Be-8 + α → ¹²C, completing triple-α
     frozenset({'C',  'He'}): 'O',
     frozenset({'O',  'He'}): 'Ne',
     frozenset({'Ne', 'He'}): 'Mg',

@@ -71,6 +71,11 @@ chemistry:
   coulomb_barrier_scale: 9600.0   # sim KE × fm  (calibrates H+H barrier ≈ 4000)
   fusion_enabled: true
 
+  # Q-value scaling — converts (amu mass deficit) into sim KE units so the
+  # energy-conservation check (rel_KE + Q ≥ 0) is dimensionally consistent.
+  # The Q-values themselves come from real AME 2020 measured isotope masses.
+  q_value_scale: 1.0
+
   # Radiation pressure feedback from each fusion event.
   # Each fusion emits an outward velocity kick to nearby particles, falling off
   # as 1/r.  This is the stellar thermostat: more fusion → more radiation →

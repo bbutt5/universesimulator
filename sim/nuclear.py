@@ -48,6 +48,29 @@ import numpy as np
 # experiments on stable nuclei. Krane, "Introductory Nuclear Physics" §3.1.
 _R0_FM = 1.2
 
+# CODATA: 1 atomic mass unit (amu) in MeV/c²
+AMU_TO_MEV = 931.494
+
+
+def fusion_q_amu(m_a: float, m_b: float, m_product: float) -> float:
+    """Q-value (released rest-mass energy) of A + B → C, in amu.
+
+        Q = (m_A + m_B - m_C) · c²
+
+    A positive Q means the reaction releases energy (exothermic). With the
+    exact AME 2020 isotope masses on each Element, this is the *real*
+    Q-value — no semi-empirical mass formula approximation needed.
+
+    Examples (handbook values):
+        H + H → D    : Q = +1.44  MeV   (pp-chain step 1, β⁺ branch)
+        D + D → He   : Q = +23.85 MeV
+        H + D → He3  : Q = +5.49  MeV
+        He+He → Be8  : Q = −0.092 MeV   (resonance; needs KE assist)
+        Be8+He → C   : Q = +7.37  MeV   (triple-α completion)
+        Si + Si → Fe : Q = +17.6  MeV
+    """
+    return m_a + m_b - m_product
+
 
 def coulomb_barrier_sim(
     z1: float, a1: float, z2: float, a2: float, scale: float,

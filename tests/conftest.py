@@ -53,6 +53,7 @@ def cfg():
             # to trigger in tests. Production scale is 9600 (≈ MeV regime).
             'coulomb_barrier_scale': 1.0,
             'fusion_enabled': True,
+            'q_value_scale': 1.0,
             'radiation_radius': 500.0,
             'radiation_energy_scale': 100.0,
         },
