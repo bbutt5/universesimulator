@@ -4,6 +4,8 @@ A 3D real-time particle physics simulation that grows a universe from nothing �
 
 No galaxy shapes are hardcoded. Structure emerges naturally from primordial density perturbations, Hubble expansion, and gravitational collapse.
 
+**Project principle:** prefer emergent / derived-from-physics approaches over hardcoded constants, tables, and flags. See [PHILOSOPHY.md](PHILOSOPHY.md).
+
 ## Features
 
 - **N-body gravity** — symmetric O(N²/2) with Newton's 3rd law, vectorised with NumPy
