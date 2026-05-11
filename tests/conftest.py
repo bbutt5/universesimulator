@@ -49,7 +49,9 @@ def cfg():
             'bond_spring_constant': 0.8,
             'bond_de_scale': 80.0,
             'bond_break_factor': 2.8,
-            'fusion_ke_threshold': 1.0,
+            # Tiny Coulomb scale → barriers are trivially small → fusion easy
+            # to trigger in tests. Production scale is 9600 (≈ MeV regime).
+            'coulomb_barrier_scale': 1.0,
             'fusion_enabled': True,
             'radiation_radius': 500.0,
             'radiation_energy_scale': 100.0,

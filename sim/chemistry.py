@@ -16,10 +16,12 @@ A bond breaks when the current length exceeds bond_break_factor * eq_length.
 Nuclear fusion
 --------------
 Two atoms fuse when:
-  1. A reaction product exists in FUSION_REACTIONS
-  2. Both atoms have can_fuse=True
-  3. Reduced-mass kinetic energy ½μv_rel² > fusion_ke_threshold * threshold_factor
-  4. They are within 2*(rc_i + rc_j) of each other
+  1. They are within 2*(rc_i + rc_j) of each other
+  2. Their reduced-mass relative kinetic energy ½μv_rel² exceeds the
+     classical Coulomb barrier V_C = scale·Z₁·Z₂ / (r₀·(A₁^⅓+A₂^⅓))
+     (see sim/nuclear.py).  Gamow tunnelling is not yet modelled.
+  3. A reaction product exists in FUSION_REACTIONS (phenomenological
+     lookup — to be replaced by Q-value calculation in task 4 of #11).
 
 On fusion both reactants are removed and a new product particle is inserted
 at the centre-of-mass with momentum-conserved velocity.
@@ -35,7 +37,11 @@ The magnitude is controlled by chemistry.radiation_energy_scale.
 from __future__ import annotations
 import numpy as np
 
-from sim.elements import ELEMENTS, ELEMENTS_LIST, fusion_product
+from sim.elements import (
+    ELEMENTS, ELEMENTS_LIST, fusion_product,
+    ATOMIC_NUMBERS_Z, MASS_NUMBERS_A,
+)
+from sim.nuclear import coulomb_barriers_matrix
 from sim.particle import Bond
 from sim.spatial import build_grid, neighbors
 
@@ -163,9 +169,15 @@ def _form_bonds(world) -> None:
 def _fuse(world) -> None:
     """
     Vectorised fusion pass:
-      1. NumPy screens all fusable pairs for distance + KE in one shot.
-      2. Python loop only over the handful of pairs that actually pass.
-      3. After structural changes, radiation kicks applied to survivors.
+      1. Every pair of nearby particles is a fusion candidate (no boolean
+         flag) — what matters is whether they clear the classical Coulomb
+         barrier in the CM frame, V_C = scale·Z₁·Z₂ / (r₀·(A₁^⅓+A₂^⅓)).
+         (Gamow tunnelling is not yet modelled — tracked on issue #11.)
+      2. Pairs that pass the barrier check are sorted by excess KE and
+         processed greedily (each particle fuses at most once per step).
+      3. Product symbol is looked up in FUSION_REACTIONS — still
+         phenomenological until task 4 derives it from Q-values.
+      4. After structural changes, radiation kicks are applied to survivors.
     """
     if not world.cfg.chemistry.fusion_enabled or world.n < 2:
         return
@@ -173,19 +185,15 @@ def _fuse(world) -> None:
     n   = world.n
     cfg = world.cfg.chemistry
 
-    can_fuse = np.array([ELEMENTS_LIST[world.elem_ids[i]].can_fuse for i in range(n)])
-    fi_all   = np.where(can_fuse)[0]
-    nf       = len(fi_all)
-    if nf < 2:
-        return
+    # Per-particle nuclear data (real Z, A from the periodic table)
+    e_ids  = world.elem_ids[:n]
+    z_all  = ATOMIC_NUMBERS_Z[e_ids]
+    a_all  = MASS_NUMBERS_A[e_ids]
 
-    pos_f  = world.positions[fi_all]
-    vel_f  = world.velocities[fi_all]
-    mass_f = world.masses[fi_all]
-    rc_f   = np.array([ELEMENTS_LIST[world.elem_ids[fi_all[k]]].covalent_radius
-                       for k in range(nf)])
-    tf_f   = np.array([ELEMENTS_LIST[world.elem_ids[fi_all[k]]].fusion_threshold_factor
-                       for k in range(nf)])
+    pos_f  = world.positions[:n]
+    vel_f  = world.velocities[:n]
+    mass_f = world.masses[:n]
+    rc_f   = np.array([ELEMENTS_LIST[e_ids[k]].covalent_radius for k in range(n)])
 
     diff    = pos_f[:, np.newaxis, :] - pos_f[np.newaxis, :, :]
     dist_sq = np.einsum('ijk,ijk->ij', diff, diff)
@@ -196,30 +204,38 @@ def _fuse(world) -> None:
     if len(pi) == 0:
         return
 
-    rel_vel     = vel_f[pi] - vel_f[pj]
-    mu          = mass_f[pi] * mass_f[pj] / (mass_f[pi] + mass_f[pj])
-    rel_ke      = 0.5 * mu * np.einsum('ij,ij->i', rel_vel, rel_vel)
-    ke_thresh   = cfg.fusion_ke_threshold
-    thresh_pairs = ke_thresh * (tf_f[pi] + tf_f[pj]) * 0.5
-    hot          = np.where(rel_ke >= thresh_pairs)[0]
-    if len(hot) == 0:
+    rel_vel = vel_f[pi] - vel_f[pj]
+    mu      = mass_f[pi] * mass_f[pj] / (mass_f[pi] + mass_f[pj])
+    rel_ke  = 0.5 * mu * np.einsum('ij,ij->i', rel_vel, rel_vel)
+
+    # Classical Coulomb barrier per candidate pair (sim units).
+    # Form: V_C = scale·Z₁·Z₂ / (r₀·(A₁^⅓+A₂^⅓))
+    coulomb_scale = float(getattr(cfg, 'coulomb_barrier_scale', 0.0))
+    if coulomb_scale <= 0.0:
+        return
+    barriers = coulomb_barriers_matrix(z_all, a_all, coulomb_scale)
+    v_c      = barriers[pi, pj]
+
+    over_barrier = np.where(rel_ke >= v_c)[0]
+    if len(over_barrier) == 0:
         return
 
-    hot = hot[np.argsort(-rel_ke[hot])]
+    # Process most-energetic pairs first so the biggest fusions happen
+    over_barrier = over_barrier[np.argsort(-(rel_ke[over_barrier] - v_c[over_barrier]))]
 
     used:   set[int] = set()
     events: list[tuple[int, int, str]] = []
 
-    for h in hot:
-        i = int(fi_all[pi[h]])
-        j = int(fi_all[pj[h]])
+    for h in over_barrier:
+        i = int(pi[h])
+        j = int(pj[h])
         if i in used or j in used:
             continue
         sym_i = ELEMENTS_LIST[world.elem_ids[i]].symbol
         sym_j = ELEMENTS_LIST[world.elem_ids[j]].symbol
         prod  = fusion_product(sym_i, sym_j)
         if prod is None or prod not in ELEMENTS:
-            continue
+            continue   # cleared the barrier, but no product in our table yet
         events.append((i, j, prod))
         used.add(i)
         used.add(j)

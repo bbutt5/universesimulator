@@ -114,7 +114,7 @@ class TestBondBreaking:
 
 class TestFusion:
     def test_two_hydrogen_fuse_to_deuterium(self, cfg):
-        cfg.chemistry.fusion_ke_threshold = 1.0   # very low threshold
+        cfg.chemistry.coulomb_barrier_scale = 1.0   # very low threshold
         w = World(cfg)
 
         r_eq = ELEMENTS['H'].covalent_radius * 2
@@ -131,7 +131,7 @@ class TestFusion:
         assert product_sym == 'D'
 
     def test_fusion_conserves_momentum(self, cfg):
-        cfg.chemistry.fusion_ke_threshold = 1.0
+        cfg.chemistry.coulomb_barrier_scale = 1.0
         w = World(cfg)
 
         r_eq = ELEMENTS['H'].covalent_radius * 2
@@ -160,8 +160,11 @@ class TestFusion:
         assert w.n == 2   # no fusion
         assert w.total_fusions == 0
 
-    def test_non_fusable_elements_do_not_fuse(self, cfg):
-        cfg.chemistry.fusion_ke_threshold = 1.0
+    def test_elements_without_product_in_table_do_not_fuse(self, cfg):
+        """C+C clears its Coulomb barrier easily at high KE, but our reaction
+        table has no C+C → ? entry (until task #4 derives products from
+        Q-values), so no fusion event happens."""
+        cfg.chemistry.coulomb_barrier_scale = 1.0
         w = World(cfg)
 
         r_eq = ELEMENTS['C'].covalent_radius * 2
@@ -171,13 +174,13 @@ class TestFusion:
 
         chemistry._fuse(w)
 
-        assert w.n == 2   # C has can_fuse=False
+        assert w.n == 2   # no product → no event
 
 
 class TestRadiationKick:
     def test_fusion_kicks_nearby_observer_outward(self, cfg):
         """A particle near a fusion site should receive an outward velocity kick."""
-        cfg.chemistry.fusion_ke_threshold = 1.0
+        cfg.chemistry.coulomb_barrier_scale = 1.0
         w = World(cfg)
 
         r_eq   = ELEMENTS['H'].covalent_radius * 2
@@ -202,7 +205,7 @@ class TestRadiationKick:
 
     def test_observer_beyond_radius_not_kicked(self, cfg):
         """A particle beyond radiation_radius should not be affected."""
-        cfg.chemistry.fusion_ke_threshold = 1.0
+        cfg.chemistry.coulomb_barrier_scale = 1.0
         cfg.chemistry.radiation_radius    = 100.0   # small radius
         w = World(cfg)
 
@@ -221,7 +224,7 @@ class TestRadiationKick:
 
     def test_kick_disabled_when_scale_zero(self, cfg):
         """Setting radiation_energy_scale=0 should produce no kick."""
-        cfg.chemistry.fusion_ke_threshold   = 1.0
+        cfg.chemistry.coulomb_barrier_scale = 1.0
         cfg.chemistry.radiation_energy_scale = 0.0
         w = World(cfg)
 

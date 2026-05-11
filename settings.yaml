@@ -54,7 +54,15 @@ chemistry:
   bond_spring_constant: 0.8    # Morse well spring constant k (energy/SU²)
   bond_de_scale: 80.0          # global dissociation energy scale (simulation energy units)
   bond_break_factor: 2.8       # break bond when dist > factor * equilibrium_length
-  fusion_ke_threshold: 4000.0  # relative KE (½μv²) required for nuclear fusion
+  # Nuclear fusion is gated by the classical Coulomb barrier:
+  #   V_C = coulomb_barrier_scale · Z₁·Z₂ / (r₀·(A₁^⅓ + A₂^⅓))
+  # where r₀ = 1.2 fm is the standard nuclear-radius constant (Krane 1988).
+  # The *form* is real physics; the scale converts (sim_KE × fm) and exists
+  # only because the sim runs in custom time-scaled units.  The relative
+  # barrier heights across element pairs (H+H easiest, scales with Z₁·Z₂)
+  # are physically correct regardless of the scale value.
+  # Gamow tunnelling is NOT yet modelled — tracked on issue #11.
+  coulomb_barrier_scale: 9600.0   # sim KE × fm  (calibrates H+H barrier ≈ 4000)
   fusion_enabled: true
 
   # Radiation pressure feedback from each fusion event.

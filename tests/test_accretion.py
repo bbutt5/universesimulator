@@ -81,13 +81,33 @@ class TestAccretionConditions:
         accretion.update(w)
         assert w.n == 2
 
-    def test_fusable_particles_do_not_accrete(self, cfg):
-        """H and He are fusable — they should never accrete, only fuse."""
+    def test_bound_h_pair_above_coulomb_barrier_defers_to_fusion(self, cfg):
+        """Pair is gravitationally bound (rel_KE < grav_PE) but also above
+        V_C(H,H) — accretion must defer so chemistry handles it as fusion.
+
+        cfg test values: G=100, m_h=1.008, r=50 → grav_PE ≈ 2.03
+        coulomb scale=1.0 → V_C(H,H) ≈ 0.417 sim units
+        Choose rel_KE ≈ 1.0 (between 0.417 and 2.03):
+          v_each = ±1.0, rel_KE = m_h × v² ≈ 1.008
+        """
+        cfg.chemistry.coulomb_barrier_scale = 1.0
+        w = World(cfg)
+        _place(w, 'H', [0.0,  0.0, 0.0], vel=[ 1.0, 0.0, 0.0])
+        _place(w, 'H', [50.0, 0.0, 0.0], vel=[-1.0, 0.0, 0.0])
+        accretion.update(w)
+        assert w.n == 2, "Coulomb-barrier-clearing pair must defer to fusion"
+
+    def test_cold_h_pair_accretes(self, cfg):
+        """A pair of H atoms at rest is gravitationally bound and below the
+        Coulomb barrier — physical outcome is accretion (cold molecular H,
+        the precursor of star formation). Old can_fuse=True flag wrongly
+        prevented this; the Coulomb-barrier model correctly allows it."""
+        cfg.chemistry.coulomb_barrier_scale = 1.0
         w = World(cfg)
         _place(w, 'H', [0.0,  0.0, 0.0])
         _place(w, 'H', [50.0, 0.0, 0.0])
         accretion.update(w)
-        assert w.n == 2   # H has can_fuse=True → excluded from accretion
+        assert w.n == 1, "Cold bound H pair should accrete (below V_C)"
 
     def test_distant_particles_do_not_merge(self, cfg):
         w = World(cfg)

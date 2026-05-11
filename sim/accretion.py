@@ -1,28 +1,29 @@
 """
-Gravitational accretion — merges gravitationally bound inert particles.
+Gravitational accretion — merges gravitationally bound particles.
 
-Two non-fusable particles merge when they are:
+A pair merges when they are:
   1. Within accretion_radius of each other
   2. Gravitationally bound: relative KE < mutual gravitational PE
+  3. *Not* energetic enough to clear their Coulomb barrier this step
+     (otherwise they will fuse, not accrete)
 
-The merged body inherits the heavier particle's element identity and
-the combined mass of both.  Momentum is conserved exactly.
+Condition (3) replaces the old ``can_fuse`` boolean.  It is real physics:
+a pair of nuclei that clears its V_C produces a fusion event; a bound
+pair below V_C drops into a stable gravitationally-bound configuration.
+The split between "stars" (light, hot, fusion-dominated regions) and
+"planets" (heavy, cold, accretion-dominated regions) is therefore
+emergent — it follows from the Z₁·Z₂ scaling of the Coulomb barrier
+and the local kinetic-energy distribution.
 
-Why only non-fusable elements?
-  H, D, He can_fuse=True  →  they fuse instead (handled by chemistry.py)
-  C, O, Si, Fe can_fuse=False  →  they accrete into rocky/metallic bodies
-
-This separation naturally produces:
-  - Stellar cores from fusable light elements (H/He clouds collapsing and fusing)
-  - Rocky planets from heavy refractory elements (Si, Fe, O accreting)
-  - No structure is hardcoded; the mass threshold for "planet" vs "star" appearance
-    is set in renderer settings only for visualisation.
+The merged body inherits the heavier particle's element identity and the
+combined mass.  Momentum is conserved exactly.
 """
 
 from __future__ import annotations
 import numpy as np
 
-from sim.elements import ELEMENTS_LIST
+from sim.elements import ELEMENTS_LIST, ATOMIC_NUMBERS_Z, MASS_NUMBERS_A
+from sim.nuclear import coulomb_barrier_sim
 from sim.spatial import build_grid, neighbors
 
 
@@ -43,11 +44,14 @@ def update(world) -> None:
     vel = world.velocities[:n]
     m   = world.masses[:n]
 
-    # Only inert (non-fusable) particles accrete; fusable ones fuse via chemistry
-    can_accrete = np.array(
-        [not ELEMENTS_LIST[world.elem_ids[i]].can_fuse for i in range(n)],
-        dtype=bool,
-    )
+    # Pull the Coulomb-barrier scale so accretion can defer to fusion when
+    # the pair clears its V_C this step.  If fusion is disabled or no scale
+    # is set, accretion proceeds purely on the binding-energy criterion.
+    chem_cfg = getattr(world.cfg, 'chemistry', None)
+    fusion_on    = bool(getattr(chem_cfg, 'fusion_enabled', False)) if chem_cfg else False
+    coulomb_scale = float(getattr(chem_cfg, 'coulomb_barrier_scale', 0.0)) if chem_cfg else 0.0
+    z_all = ATOMIC_NUMBERS_Z[world.elem_ids[:n]]
+    a_all = MASS_NUMBERS_A[world.elem_ids[:n]]
 
     grid = build_grid(pos, cutoff)
 
@@ -55,10 +59,10 @@ def update(world) -> None:
     merges: list[tuple[int, int]] = []
 
     for i in range(n):
-        if i in used or not can_accrete[i]:
+        if i in used:
             continue
         for j in neighbors(i, pos, grid, cutoff):
-            if j <= i or j in used or not can_accrete[j]:
+            if j <= i or j in used:
                 continue
 
             dr   = pos[j] - pos[i]
@@ -72,11 +76,23 @@ def update(world) -> None:
             rel_ke  = 0.5 * mu * float(np.dot(dv, dv))
             grav_pe = G * m[i] * m[j] / r   # positive magnitude
 
-            if rel_ke < grav_pe:   # bound: gravitational PE exceeds kinetic energy
-                merges.append((i, j))
-                used.add(i)
-                used.add(j)
-                break
+            if rel_ke >= grav_pe:
+                continue   # unbound — will fly apart, no merge
+
+            # Coulomb-barrier check: if this pair could fuse this step,
+            # defer to chemistry (no merge). Real physics — the same pair
+            # cannot be simultaneously fusing and accreting.
+            if fusion_on and coulomb_scale > 0.0:
+                v_c = coulomb_barrier_sim(
+                    z_all[i], a_all[i], z_all[j], a_all[j], coulomb_scale,
+                )
+                if rel_ke >= v_c:
+                    continue   # fusion regime — let _fuse handle it
+
+            merges.append((i, j))
+            used.add(i)
+            used.add(j)
+            break
 
     # Apply largest-index-first so swap-with-last removal stays valid
     merges.sort(key=lambda e: max(e[0], e[1]), reverse=True)
