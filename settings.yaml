@@ -172,4 +172,11 @@ renderer:
   # dim sources; lower exposure prevents bright sources from clipping. Same
   # control a photographer uses. Real long-exposure astrophotography uses
   # very high effective exposure to bring out dim nebulae.
-  render_exposure: 5.0
+  render_exposure: 3.0
+
+  # Beer-Lambert extinction — cold gas in the line of sight absorbs light
+  # from emitters behind it (F_obs = F_emitted · exp(−τ)).  Produces the
+  # dark-nebula silhouettes (Horsehead, Coalsack) and dims foreground-gas-
+  # backed stars.  Set extinction_opacity to 0 to disable.
+  extinction_opacity:    0.05    # per-particle optical-depth contribution
+  extinction_kernel_sigma: 30.0  # perpendicular-distance falloff (SU)

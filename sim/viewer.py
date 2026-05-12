@@ -64,6 +64,7 @@ from vispy.visuals.transforms import STTransform
 
 from sim.diagnostics import kinetic_energy, gravitational_pe, linear_momentum
 from sim.elements import ELEMENTS_LIST
+from sim.extinction import compute_visibility, per_particle_optical_depth
 from sim.illumination import compute_received_rgb_flux
 from sim.molecules import identify_molecules, molecule_counts
 from sim.states import state_counts
@@ -376,6 +377,23 @@ class Viewer:
             body_mul[body_mask] = _BODY_HALO_MUL
         rgb_total = rgb_self * body_mul[:, None] + albedo * rgb_received
 
+        # --- Beer-Lambert extinction along the line of sight to the camera --
+        # Cold gas between an emitter and the observer absorbs / scatters
+        # photons:  F_obs = F_emitted · exp(−τ).  Produces dark-nebula
+        # silhouettes (Horsehead, Coalsack) when dense cold clouds sit in
+        # front of bright sources.
+        cam_pos = self._camera_position_world()
+        if cam_pos is not None:
+            opacity_base = float(getattr(cfg, 'extinction_opacity', 0.05))
+            kernel_sigma = float(getattr(cfg, 'extinction_kernel_sigma', 30.0))
+            optical_d = per_particle_optical_depth(
+                T_K, sizes,
+                cold_threshold_K=3000.0,
+                base_opacity=opacity_base,
+            )
+            visibility = compute_visibility(pos, optical_d, cam_pos, kernel_sigma)
+            rgb_total = rgb_total * visibility[:, None]
+
         # Raw scalar luminance (BT.601 perceptual weights) — drives halo size
         # before tone-mapping, because the *physical* radiated power sets the
         # apparent angular extent (Stefan-Boltzmann), not the camera response.
@@ -596,6 +614,32 @@ class Viewer:
     #   Tanner Helland, "How to Convert Temperature (K) to RGB" (2012)
     #   The piecewise fit reproduces the CIE blackbody curve from ~1000 K
     #   (deep red) through ~5800 K (sunlight) to ~30000 K (hot O-class blue).
+
+    def _camera_position_world(self) -> np.ndarray | None:
+        """Camera position in world coordinates, derived from the
+        TurntableCamera's azimuth / elevation / distance / center.
+
+        vispy's TurntableCamera doesn't expose `position` directly; we
+        reconstruct it from the spherical-coordinate parameters. Used by
+        the Beer-Lambert extinction pass to set up line-of-sight rays.
+        """
+        cam = self.view.camera
+        try:
+            azimuth   = float(cam.azimuth)
+            elevation = float(cam.elevation)
+            distance  = float(cam.distance)
+            center    = np.asarray(cam.center, dtype=np.float32)
+        except (AttributeError, TypeError):
+            return None
+        # Spherical → Cartesian (vispy uses degrees + a specific convention)
+        a = np.deg2rad(azimuth)
+        e = np.deg2rad(elevation)
+        offset = distance * np.array([
+            np.cos(e) * np.cos(a),
+            np.cos(e) * np.sin(a),
+            np.sin(e),
+        ], dtype=np.float32)
+        return (center + offset).astype(np.float32)
 
     @staticmethod
     def _blackbody_rgb(T_kelvin: np.ndarray) -> np.ndarray:
