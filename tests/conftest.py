@@ -60,6 +60,11 @@ def cfg():
         'accretion': {
             'accretion_radius': 150.0,
         },
+        'reactions': {
+            'reaction_radius':          150.0,
+            'activation_energy_scale':  200.0,
+            'heat_release_scale':         0.5,
+        },
         'cosmology': {
             'hubble_initial': 0.01,
             'n_density_seeds': 3,

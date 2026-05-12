@@ -83,6 +83,21 @@ chemistry:
   radiation_radius: 600.0      # how far the kick reaches (SU)
   radiation_energy_scale: 150.0  # kick magnitude at 1 SU distance (SU²/s)
 
+reactions:
+  # --------------------------------------------------------------------------
+  # Phase-4 chemical reactions — electronegativity-driven bond swaps.
+  # For each existing bond, looks at every atom in a neighbouring search
+  # radius; if any candidate offers a more thermodynamically stable bond
+  # (higher Pauling D), the swap occurs with probability
+  #     P = 1 − exp(−ΔE / activation_energy_scale)
+  # and the released energy ΔE × heat_release_scale is injected as relative
+  # KE into the (departing-partner, new-partner) pair with full momentum
+  # conservation.  Set reaction_radius to 0 to disable reactions entirely.
+  # --------------------------------------------------------------------------
+  reaction_radius:          150.0    # SU — pairs within this distance considered
+  activation_energy_scale:  200.0    # kJ/mol — Arrhenius-like rate scale
+  heat_release_scale:         0.5    # ΔE [kJ/mol] → sim KE for the j-k kick
+
 accretion:
   # --------------------------------------------------------------------------
   # Gravitational accretion: two non-fusable particles that are gravitationally

@@ -592,6 +592,7 @@ class Viewer:
             f'Universe | {status}'
             f'n={w.n}  bonds={len(w.bonds)}  '
             f'fusions={w.total_fusions}  accreted={w.total_accretions}  '
+            f'rxns={w.total_reactions}  '
             f'S:{sc["solid"]} L:{sc["liquid"]} G:{sc["gas"]} P:{sc["plasma"]}  '
             f'E={e_total:.2e}{drift}  clamps={w.total_velocity_clamps}  '
             f't={w.time:.1f}s  fps={self._fps:.0f}  '
