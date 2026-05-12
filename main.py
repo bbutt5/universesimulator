@@ -58,7 +58,10 @@ def main() -> None:
     print('  Left-drag        → orbit   |  Right-drag / Scroll → zoom  |  Middle → pan')
     print('  Arrow keys       → orbit   |  Page Up/Down        → zoom')
     print('  Space            → pause   |  +/-                 → speed up/down')
+    print('  F                → cinematic camera (auto orbit)')
+    print('  P                → toggle astronomy colour palette')
     print('  R                → reset camera  |  Q / Esc → quit')
+    print('  Left-click       → inspect particle')
     print()
 
     viewer.run()

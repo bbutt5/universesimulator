@@ -16,7 +16,9 @@ Controls (built into vispy TurntableCamera):
   Scroll      → zoom
   Space       → pause / resume
   +/-         → speed up / slow down sim
-  R           → reset zoom
+  R           → reset camera (cancels cinematic mode)
+  F           → cinematic camera (auto orbit + breathing elevation)
+  P           → toggle astronomy palette (stellar colour-temperature)
   Q / Escape  → quit
   Left-click  → inspect particle (click again to deselect)
 """
@@ -54,6 +56,25 @@ _COLOUR_STAR   = np.array([1.00, 0.92, 0.65], dtype=np.float32)   # warm yellow-
 _COLOUR_HOT    = np.array([1.00, 0.40, 0.10], dtype=np.float32)   # heat tint blended in
 _COLOUR_PLASMA = np.array([0.70, 0.85, 1.00], dtype=np.float32)   # ionised: bluish-white
 
+# Glow / nebula tuning
+_INNER_GLOW_SIZE_MUL = 2.2     # inner halo size relative to particle size
+_OUTER_GLOW_SIZE_MUL = 5.5     # outer halo (nebula)
+_INNER_GLOW_BASE_ALPHA = 0.30
+_INNER_GLOW_HEAT_ALPHA = 0.55
+_OUTER_GLOW_BASE_ALPHA = 0.06
+_OUTER_GLOW_HEAT_ALPHA = 0.16
+_NEBULA_SIZE_MUL       = 12.0  # gas particles get HUGE diffuse halos
+_NEBULA_ALPHA          = 0.07
+
+# Cinematic camera
+_CINEMATIC_ORBIT_DEG_PER_SEC = 6.0
+_CINEMATIC_ELEV_AMPLITUDE    = 12.0
+_CINEMATIC_ELEV_PERIOD_SEC   = 35.0
+
+# Starfield
+_STARFIELD_COUNT     = 3000
+_STARFIELD_RADIUS_MUL = 8.0    # how far behind the action stars sit
+
 
 class Viewer:
     def __init__(self, world: World, cfg):
@@ -63,11 +84,13 @@ class Viewer:
         self.speed  = 1.0   # time-scale multiplier
 
         # ---- canvas -------------------------------------------------------
+        # Pure black background: a darker void makes additive glow + the
+        # starfield pop with higher dynamic range than the original deep-blue.
         bg = cfg.renderer.background
         self.canvas = scene.SceneCanvas(
             title='Universe Simulator',
             size=(cfg.renderer.width, cfg.renderer.height),
-            bgcolor=tuple(bg) + (1.0,),
+            bgcolor=(0.005, 0.005, 0.01, 1.0),
             keys='interactive',
             show=True,
         )
@@ -78,9 +101,35 @@ class Viewer:
         self.view.camera.azimuth   = _CAM_AZIMUTH_0
         self.view.camera.elevation = _CAM_ELEVATION_0
 
-        # ---- visuals -------------------------------------------------------
+        # ---- starfield (distant fixed dim points) -------------------------
+        self._setup_starfield()
+
+        # ---- nebula / outer glow halo (additive blending) -----------------
+        # Large soft halos around every particle. With many overlapping halos,
+        # additive blending creates volumetric nebula-like clouds without any
+        # explicit volume rendering.
+        self.markers_nebula = visuals.Markers(parent=self.view.scene)
+        self.markers_nebula.antialias = 1
+        self.markers_nebula.set_gl_state(
+            'translucent', blend=True,
+            blend_func=('src_alpha', 'one'),   # additive
+            depth_test=False,
+        )
+        self.markers_nebula.order = -2          # behind everything
+
+        # ---- inner glow (additive, smaller halo around bright objects) ----
+        self.markers_inner_glow = visuals.Markers(parent=self.view.scene)
+        self.markers_inner_glow.antialias = 1
+        self.markers_inner_glow.set_gl_state(
+            'translucent', blend=True,
+            blend_func=('src_alpha', 'one'),
+            depth_test=False,
+        )
+        self.markers_inner_glow.order = -1
+
+        # ---- primary markers (opaque cores) ------------------------------
         self.markers = visuals.Markers(parent=self.view.scene)
-        self.markers.antialias = 0
+        self.markers.antialias = 1
 
         self.lines = visuals.Line(
             parent=self.view.scene,
@@ -125,6 +174,55 @@ class Viewer:
         self._energy_ref   = None     # set once we have ≥2 particles
         self._energy_frame = 0
 
+        # ---- cinematic mode (auto camera) ---------------------------------
+        self._cinematic_mode: bool = False
+        self._cinematic_t:    float = 0.0
+        self._astronomy_palette: bool = False     # 'P' to toggle
+
+    # ------------------------------------------------------------------
+    # Starfield — fixed distant points that give the void a sense of depth
+    # ------------------------------------------------------------------
+
+    def _setup_starfield(self) -> None:
+        rng    = np.random.default_rng(42)
+        n      = _STARFIELD_COUNT
+        radius = float(self.cfg.renderer.camera_distance) * _STARFIELD_RADIUS_MUL
+
+        # Uniform points on a sphere
+        phi       = rng.uniform(0.0, 2.0 * np.pi, n)
+        cos_theta = rng.uniform(-1.0, 1.0, n)
+        sin_theta = np.sqrt(np.clip(1.0 - cos_theta * cos_theta, 0.0, 1.0))
+        pos = np.column_stack([
+            radius * sin_theta * np.cos(phi),
+            radius * sin_theta * np.sin(phi),
+            radius * cos_theta,
+        ]).astype(np.float32)
+
+        # Brightness + slight colour variation (mostly white-blue, a few warm)
+        brightness = rng.uniform(0.2, 1.0, n).astype(np.float32) ** 2
+        warm       = rng.random(n) < 0.15
+        r = np.where(warm, 1.0, 0.85 + 0.15 * rng.random(n))
+        g = np.where(warm, 0.85, 0.90 + 0.10 * rng.random(n))
+        b = 1.0 - 0.3 * warm.astype(np.float32)
+        colors = np.column_stack([
+            (r * brightness).astype(np.float32),
+            (g * brightness).astype(np.float32),
+            (b * brightness).astype(np.float32),
+            (brightness * 0.85).astype(np.float32),
+        ])
+
+        sizes = (rng.uniform(1.0, 3.5, n) * brightness).astype(np.float32) + 0.5
+
+        self.starfield = visuals.Markers(parent=self.view.scene)
+        self.starfield.antialias = 1
+        self.starfield.set_data(pos=pos, face_color=colors, size=sizes, edge_width=0)
+        self.starfield.set_gl_state(
+            'translucent', blend=True,
+            blend_func=('src_alpha', 'one'),    # additive — natural for stars
+            depth_test=False,
+        )
+        self.starfield.order = -10
+
     # ------------------------------------------------------------------
     # Timer callback — drives simulation + render each frame
     # ------------------------------------------------------------------
@@ -147,6 +245,15 @@ class Viewer:
             for _ in range(n_steps):
                 self.world.step(dt)
 
+        # Cinematic camera — slow orbit + breathing elevation
+        if self._cinematic_mode:
+            self._cinematic_t += wall
+            cam = self.view.camera
+            cam.azimuth   = (_CAM_AZIMUTH_0 + _CINEMATIC_ORBIT_DEG_PER_SEC * self._cinematic_t) % 360.0
+            cam.elevation = _CAM_ELEVATION_0 + _CINEMATIC_ELEV_AMPLITUDE * np.sin(
+                2.0 * np.pi * self._cinematic_t / _CINEMATIC_ELEV_PERIOD_SEC
+            )
+
         self._update_visuals()
         self._update_title()
 
@@ -161,8 +268,12 @@ class Viewer:
 
         if n == 0:
             self._selected = None
-            self.markers.set_data(pos=np.zeros((1, 3)), face_color=(0, 0, 0, 0))
-            self._select_marker.set_data(pos=np.zeros((1, 3)), face_color=(0, 0, 0, 0), size=1, edge_width=0)
+            zeros = np.zeros((1, 3), dtype=np.float32)
+            transparent = (0.0, 0.0, 0.0, 0.0)
+            self.markers.set_data(pos=zeros, face_color=transparent)
+            self.markers_inner_glow.set_data(pos=zeros, face_color=transparent, size=1, edge_width=0)
+            self.markers_nebula.set_data(pos=zeros, face_color=transparent, size=1, edge_width=0)
+            self._select_marker.set_data(pos=zeros, face_color=transparent, size=1, edge_width=0)
             self._info_text.text = ''
             self.lines.set_data(pos=np.zeros((2, 3)))
             return
@@ -181,10 +292,12 @@ class Viewer:
             colors[idx, :3] = elem.color
             sizes[idx]      = cfg.particle_size_base + cfg.particle_size_scale * elem.covalent_radius
 
-        # --- Temperature tint (cold → CPK, hot → orange-red) --------------
+        # --- Kinetic energy per particle (also used for halo intensity) ---
+        ke    = 0.5 * w.masses[:n] * np.sum(w.velocities[:n] ** 2, axis=1)
         hot_T = float(getattr(cfg, 'hot_temperature_threshold', 0.0))
+
+        # --- Temperature tint (cold → CPK, hot → orange-red) --------------
         if hot_T > 0.0:
-            ke   = 0.5 * w.masses[:n] * np.sum(w.velocities[:n] ** 2, axis=1)
             heat = np.clip(ke / hot_T, 0.0, 1.0).astype(np.float32)[:, np.newaxis]
             colors[:, :3] = colors[:, :3] * (1.0 - heat) + _COLOUR_HOT * heat
 
@@ -221,6 +334,58 @@ class Viewer:
             face_color=colors,
             size=sizes,
             edge_width=0,
+        )
+
+        # --- Astronomy palette mode (T = temperature-coloured) ------------
+        # Re-uses the per-particle KE to push colours toward the
+        # stellar-photosphere palette: cold blue → warm orange → hot blue-white,
+        # the same Planck-curve mapping astronomers use for star colour.
+        if self._astronomy_palette and hot_T > 0.0:
+            astro = self._planck_palette(ke if hot_T > 0.0 else np.zeros(n), hot_T)
+            self.markers.set_data(
+                pos=pos, face_color=astro, size=sizes, edge_width=0,
+            )
+            colors = astro     # carry through to the halos
+
+        # --- Glow halos (additive) ---------------------------------------
+        # Heat-scaled alphas. Bright/hot particles get larger, brighter halos;
+        # accreted bodies (planets, stars) get massive halos relative to their
+        # base render size, which is what makes them read as "stars" rather
+        # than dots when zoomed out.
+        if hot_T > 0.0:
+            heat_flat = np.clip(ke / hot_T, 0.0, 1.0).astype(np.float32)
+        else:
+            heat_flat = np.zeros(n, dtype=np.float32)
+        # Boost halo intensity for accreted bodies regardless of KE
+        body_boost = np.zeros(n, dtype=np.float32)
+        if planet_mask.any():
+            body_boost[planet_mask] = 0.5
+        if star_mask.any():
+            body_boost[star_mask] = 1.0
+
+        inner_alpha = (_INNER_GLOW_BASE_ALPHA
+                       + _INNER_GLOW_HEAT_ALPHA * heat_flat
+                       + 0.30 * body_boost)
+        outer_alpha = (_OUTER_GLOW_BASE_ALPHA
+                       + _OUTER_GLOW_HEAT_ALPHA * heat_flat
+                       + 0.20 * body_boost)
+
+        inner_color = colors.copy()
+        inner_color[:, 3] = np.clip(inner_alpha, 0.0, 1.0)
+        inner_size = (sizes * _INNER_GLOW_SIZE_MUL).astype(np.float32)
+        self.markers_inner_glow.set_data(
+            pos=pos, face_color=inner_color, size=inner_size, edge_width=0,
+        )
+
+        outer_color = colors.copy()
+        outer_color[:, 3] = np.clip(outer_alpha, 0.0, 1.0)
+        # Atoms get a fixed nebula-sized halo; bodies scale with their mass-cubed
+        outer_size = (sizes * _OUTER_GLOW_SIZE_MUL).astype(np.float32)
+        if planet_mask.any() or star_mask.any():
+            body_mask = planet_mask | star_mask
+            outer_size[body_mask] = (sizes[body_mask] * _NEBULA_SIZE_MUL).astype(np.float32)
+        self.markers_nebula.set_data(
+            pos=pos, face_color=outer_color, size=outer_size, edge_width=0,
         )
 
         # --- Selection ring + info text ------------------------------------
@@ -330,6 +495,12 @@ class Viewer:
             cam.elevation = _CAM_ELEVATION_0
             cam.distance  = self.cfg.renderer.camera_distance
             cam.center    = (0.0, 0.0, 0.0)
+            self._cinematic_mode = False
+        elif k == 'F':
+            self._cinematic_mode = not self._cinematic_mode
+            self._cinematic_t = 0.0
+        elif k == 'P':
+            self._astronomy_palette = not self._astronomy_palette
         elif k in ('Q', 'Escape'):
             self.canvas.app.quit()
 
@@ -379,6 +550,39 @@ class Viewer:
             in_front  = np.ones(pts.shape[0], dtype=bool)
 
         return screen_xy, in_front
+
+    # ------------------------------------------------------------------
+    # Astronomy (Planck-curve) colour palette
+    # ------------------------------------------------------------------
+    # Astronomers classify stars by colour temperature: cool stars are
+    # red-orange (M, K), Sun-like are yellow-white (G, F), hot stars are
+    # blue-white (A, B, O). The palette below is a piecewise approximation
+    # of that perceived sequence keyed off our local kinetic-energy proxy.
+
+    @staticmethod
+    def _planck_palette(ke: np.ndarray, hot_T: float) -> np.ndarray:
+        """Return Nx4 RGBA in stellar-temperature colours."""
+        t = np.clip(ke / hot_T, 0.0, 1.0).astype(np.float32)
+        # Anchor colours along the temperature axis (low → high)
+        cool = np.array([0.95, 0.40, 0.20], dtype=np.float32)   # red M-dwarf
+        warm = np.array([1.00, 0.78, 0.40], dtype=np.float32)   # K-G yellow
+        sunlike = np.array([1.00, 0.95, 0.85], dtype=np.float32) # F-G white
+        hot  = np.array([0.75, 0.85, 1.00], dtype=np.float32)   # B-class blue
+        # Mix in three segments
+        seg = np.empty((len(t), 3), dtype=np.float32)
+        for i, ti in enumerate(t):
+            if ti < 0.33:
+                u = ti / 0.33
+                seg[i] = cool * (1 - u) + warm * u
+            elif ti < 0.66:
+                u = (ti - 0.33) / 0.33
+                seg[i] = warm * (1 - u) + sunlike * u
+            else:
+                u = (ti - 0.66) / 0.34
+                seg[i] = sunlike * (1 - u) + hot * u
+        out = np.ones((len(t), 4), dtype=np.float32)
+        out[:, :3] = seg
+        return out
 
     def _particle_info(self, i: int) -> str:
         w    = self.world
