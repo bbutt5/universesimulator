@@ -134,6 +134,27 @@ reactions:
   activation_energy_scale:  200.0    # kJ/mol — Arrhenius-like rate scale
   heat_release_scale:         0.5    # ΔE [kJ/mol] → sim KE for the j-k kick
 
+photons:
+  # --------------------------------------------------------------------------
+  # Explicit radiation transport — hot particles emit photons stochastically
+  # at rate ∝ T⁴ (Stefan-Boltzmann); photons propagate in straight lines at
+  # finite speed c; absorbed photons transfer their energy + momentum to the
+  # nearest particle within absorption_cross_section.  Real radiation
+  # pressure on the emitter (recoil) and absorber (kick along propagation
+  # direction) — total momentum is exactly conserved across emit + absorb.
+  #
+  # Set speed_of_light_sim to 0 to disable photons entirely. With it enabled,
+  # the older instant-impulse "radiation kick" model in chemistry.py is still
+  # active for fusion events; the two coexist (one for steady thermal,
+  # one for discrete reaction bursts).
+  # --------------------------------------------------------------------------
+  speed_of_light_sim:         20000.0   # sim units (matches Doppler scale above)
+  emission_rate_scale:        0.5       # probability scaling per (T/T_ref)⁴
+  absorption_cross_section:   8.0       # SU — geometric capture radius
+  energy_per_photon:          100.0     # sim energy units per photon
+  cull_distance:              50000.0   # photons beyond this distance from origin culled
+  capacity:                   5000      # max simultaneously live photons
+
 outgassing:
   # --------------------------------------------------------------------------
   # Temperature-driven volatile release from hot accreted bodies. Each step,

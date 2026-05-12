@@ -26,7 +26,7 @@ rather than accrete into rocky bodies.
 from __future__ import annotations
 import numpy as np
 
-from sim import physics, chemistry, accretion, reactions, outgassing
+from sim import physics, chemistry, accretion, reactions, outgassing, photons
 from sim.elements import (
     ELEMENTS_LIST, SYMBOL_TO_ID, Element, IONIZATION_ENERGIES_EV,
 )
@@ -71,12 +71,24 @@ class World:
         self.total_accretions:      int = 0
         self.total_reactions:       int = 0     # Phase-4 chemical bond swaps
         self.total_outgassing:      int = 0     # atoms released from hot bodies
+        self.total_photons_emitted: int = 0     # thermal photons spawned
+        self.total_photons_absorbed: int = 0    # photons captured by matter
         self.total_velocity_clamps: int = 0    # diagnostics: each clamp breaks momentum conservation
 
         # Deferred injection accumulator (fractional particles)
         self._inject_acc: float = 0.0
 
         self.injector = Injector(cfg)
+
+        # Photon population — explicit radiation transport.  Disabled when
+        # cfg.photons is absent; otherwise pre-allocate the photon buffer.
+        photon_cfg = getattr(cfg, 'photons', None)
+        if photon_cfg is not None and float(getattr(photon_cfg, 'speed_of_light_sim', 0.0)) > 0:
+            self.photons: photons.PhotonState | None = photons.PhotonState(
+                capacity=int(getattr(photon_cfg, 'capacity', 5000)),
+            )
+        else:
+            self.photons = None
 
     # ------------------------------------------------------------------
     # Array growth
@@ -265,6 +277,12 @@ class World:
 
         # 10. Outgassing: hot bodies release light elements (H, He) back as gas
         outgassing.update(self)
+
+        # 11. Explicit photon transport — thermal emission, propagation,
+        #     absorption with real radiation pressure.  No-op if photons
+        #     are disabled in cfg (no PhotonState created).
+        if self.photons is not None:
+            photons.update(self, dt)
 
         self.time += dt
 

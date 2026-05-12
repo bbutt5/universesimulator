@@ -75,6 +75,14 @@ def cfg():
             'temperature_threshold_K':  3000.0,
             'light_element_mass_max':   5.0,
         },
+        'photons': {
+            'speed_of_light_sim':       0.0,    # OFF by default in tests
+            'emission_rate_scale':      0.5,
+            'absorption_cross_section': 8.0,
+            'energy_per_photon':        100.0,
+            'cull_distance':            50000.0,
+            'capacity':                 200,
+        },
         'cosmology': {
             'hubble_initial': 0.01,
             'n_density_seeds': 3,
