@@ -32,6 +32,7 @@ from vispy.visuals.transforms import STTransform
 
 from sim.diagnostics import kinetic_energy, gravitational_pe, linear_momentum
 from sim.elements import ELEMENTS_LIST
+from sim.molecules import identify_molecules, molecule_counts
 from sim.states import state_counts
 from sim.world import World
 
@@ -280,6 +281,14 @@ class Viewer:
             drift_pct = 100.0 * (e_total - self._energy_ref) / abs(self._energy_ref)
             drift     = f' drift={drift_pct:+.2f}%'
 
+        # Molecule census — show top-N by count
+        mol_str = ''
+        if w.bonds:
+            mc = molecule_counts(w)
+            if mc:
+                top_mols = sorted(mc.items(), key=lambda kv: -kv[1])[:4]
+                mol_str  = '  mols:[' + ' '.join(f'{f}:{c}' for f, c in top_mols) + ']'
+
         self.canvas.title = (
             f'Universe | {status}'
             f'n={w.n}  bonds={len(w.bonds)}  '
@@ -288,6 +297,7 @@ class Viewer:
             f'E={e_total:.2e}{drift}  clamps={w.total_velocity_clamps}  '
             f't={w.time:.1f}s  fps={self._fps:.0f}  '
             f'speed={self.speed:.1f}x  [{top}]'
+            f'{mol_str}'
         )
 
     # ------------------------------------------------------------------
@@ -398,6 +408,18 @@ class Viewer:
             f'speed: {speed:.1f}',
             f'bonds: {w.bond_counts[i]}' + (f'  → {" ".join(bonded)}' if bonded else ''),
         ]
+
+        # Molecule membership — if this atom is part of a bonded cluster,
+        # show the formula and (where known) the common name.
+        if w.bond_counts[i] > 0:
+            from sim.molecules import molecule_of
+            mol = molecule_of(w, i)
+            if mol is not None:
+                if mol.name:
+                    lines.append(f'molecule: {mol.formula}  ({mol.name})')
+                else:
+                    lines.append(f'molecule: {mol.formula}')
+
         return '\n'.join(lines)
 
     # ------------------------------------------------------------------
