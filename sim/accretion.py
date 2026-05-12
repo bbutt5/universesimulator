@@ -107,14 +107,18 @@ def update(world) -> None:
         com_pos = (m_i * world.positions[i] + m_j * world.positions[j]) / m_total
         com_vel = (m_i * world.velocities[i] + m_j * world.velocities[j]) / m_total
 
-        # Dominant element: whichever particle carries more mass
+        # Dominant element: whichever particle carries more mass (visual identity)
         dominant_elem = ELEMENTS_LIST[world.elem_ids[i] if m_i >= m_j else world.elem_ids[j]]
+
+        # Sum the compositions BEFORE remove_particle scrambles indices.
+        merged_comp = world.composition[i] + world.composition[j]
 
         a, b = (i, j) if i < j else (j, i)
         world.remove_particle(b)
         world.remove_particle(a)
 
         new_idx = world.add_particle(dominant_elem, com_pos, com_vel)
-        world.masses[new_idx] = m_total   # override with accumulated mass
+        world.masses[new_idx]       = m_total
+        world.composition[new_idx]  = merged_comp     # real element-by-element history
         world.total_accretions += 1
-        world.total_injected  -= 1        # undo the add_particle injection counter
+        world.total_injected  -= 1

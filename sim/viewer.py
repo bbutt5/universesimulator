@@ -168,6 +168,21 @@ class Viewer:
         )
         self.markers_inner_glow.order = -1
 
+        # ---- Phase-3 atmosphere halo ------------------------------------
+        # For accreted bodies that have absorbed significant light-element
+        # content (H, He), an extra halo is rendered between the body and
+        # the radiative inner glow.  Colour is the mass-weighted CPK of the
+        # body's light constituents — this is the gravitationally-bound gas
+        # envelope, distinct from the body's thermal radiation.
+        self.markers_atmosphere = visuals.Markers(parent=self.view.scene)
+        self.markers_atmosphere.antialias = 1
+        self.markers_atmosphere.set_gl_state(
+            'translucent', blend=True,
+            blend_func=('src_alpha', 'one'),
+            depth_test=False,
+        )
+        self.markers_atmosphere.order = -3
+
         # ---- primary markers (opaque cores) ------------------------------
         self.markers = visuals.Markers(parent=self.view.scene)
         self.markers.antialias = 1
@@ -270,6 +285,7 @@ class Viewer:
             self.markers.set_data(pos=zeros, face_color=transparent)
             self.markers_inner_glow.set_data(pos=zeros, face_color=transparent, size=1, edge_width=0)
             self.markers_nebula.set_data(pos=zeros, face_color=transparent, size=1, edge_width=0)
+            self.markers_atmosphere.set_data(pos=zeros, face_color=transparent, size=1, edge_width=0)
             self._select_marker.set_data(pos=zeros, face_color=transparent, size=1, edge_width=0)
             self._info_text.text = ''
             self.lines.set_data(pos=np.zeros((2, 3)))
@@ -316,15 +332,60 @@ class Viewer:
         planet_mask = (mass_ratios >= planet_threshold) & (mass_ratios < star_threshold)
         star_mask   = mass_ratios >= star_threshold
 
-        if planet_mask.any():
-            body_sizes = (body_size_scale * np.cbrt(mass_ratios)).astype(np.float32)
-            colors[planet_mask, :3] = _COLOUR_PLANET
-            sizes[planet_mask]      = body_sizes[planet_mask]
+        # ---- Composition-derived body colouring (Phase 3) -----------------
+        # Instead of a flat planet/star palette swatch, blend each body's
+        # colour from the mass-weighted CPK colours of every element it has
+        # accreted. A rocky world dominated by Fe + Si is iron-red-grey;
+        # a primordial gas giant dominated by H + He is white-pale-cyan;
+        # mixed-composition bodies take on intermediate tones. The data
+        # comes from world.composition, which is summed through accretion.
+        body_mask    = planet_mask | star_mask
+        atmosphere_visible = np.zeros(n, dtype=bool)
+        atmosphere_colors  = np.zeros((n, 3), dtype=np.float32)
+        atmosphere_frac    = np.zeros(n, dtype=np.float32)
+        if body_mask.any():
+            elem_cpk = np.array(
+                [e.color for e in ELEMENTS_LIST], dtype=np.float32,
+            )                                              # (N_elem, 3)
+            elem_masses_all = np.array(
+                [e.mass for e in ELEMENTS_LIST], dtype=np.float32,
+            )                                              # (N_elem,)
 
-        if star_mask.any():
-            body_sizes = (body_size_scale * np.cbrt(mass_ratios) * 1.5).astype(np.float32)
-            colors[star_mask, :3] = _COLOUR_STAR
-            sizes[star_mask]      = body_sizes[star_mask]
+            comp     = w.composition[:n][body_mask]        # (B, N_elem)
+            totals   = comp.sum(axis=1, keepdims=True)
+            totals   = np.maximum(totals, 1e-12)
+            fractions = comp / totals                      # (B, N_elem)
+            body_colors = (fractions @ elem_cpk).astype(np.float32)  # (B, 3)
+
+            body_sizes = (body_size_scale * np.cbrt(mass_ratios)).astype(np.float32)
+            body_sizes[star_mask] *= 1.5
+
+            colors[body_mask, :3] = body_colors
+            sizes[body_mask]      = body_sizes[body_mask]
+
+            # ---- Atmosphere extraction (light-element gas envelope) -----
+            # Real planets and stars hold gravitationally-bound gas
+            # envelopes of their lightest constituents (H, He). We project
+            # the body's composition onto its light components and render
+            # the result as a separate halo around the body.
+            light_elem_mask = elem_masses_all < 5.0           # H, D, He, He3, Li, Be8
+            light_comp      = comp[:, light_elem_mask]        # (B, N_light)
+            light_total     = light_comp.sum(axis=1)          # (B,)
+            light_frac_body = light_total / totals.flatten()  # (B,)
+            has_atm         = light_frac_body > 0.05          # ≥5% light material
+
+            if has_atm.any():
+                light_cpk      = elem_cpk[light_elem_mask]    # (N_light, 3)
+                light_totals_b = np.maximum(light_total[:, None], 1e-12)
+                light_fractions = light_comp / light_totals_b
+                atm_colors_body = (light_fractions @ light_cpk).astype(np.float32)
+
+                # Scatter back to full-particle arrays
+                body_indices = np.where(body_mask)[0]
+                atm_indices  = body_indices[has_atm]
+                atmosphere_visible[atm_indices] = True
+                atmosphere_colors[atm_indices]  = atm_colors_body[has_atm]
+                atmosphere_frac[atm_indices]    = light_frac_body[has_atm].astype(np.float32)
 
         self.markers.set_data(
             pos=pos,
@@ -438,6 +499,28 @@ class Viewer:
         self.markers_nebula.set_data(
             pos=pos, face_color=outer_rgba, size=outer_size, edge_width=0,
         )
+
+        # --- Atmosphere halo (Phase 3) -----------------------------------
+        # Gas envelope around bodies that have absorbed substantial light
+        # elements.  Rendered between the body and the thermal halo, in
+        # the mass-weighted CPK colour of the body's light constituents.
+        if atmosphere_visible.any():
+            atm_alpha = np.clip(0.5 * atmosphere_frac, 0.0, 0.6).astype(np.float32)
+            atm_alpha[~atmosphere_visible] = 0.0
+            # Size: 1.5× body size + scale with light fraction
+            atm_size  = (sizes * (1.5 + 1.8 * atmosphere_frac)).astype(np.float32)
+            atm_rgba  = np.ones((n, 4), dtype=np.float32)
+            atm_rgba[:, :3] = atmosphere_colors
+            atm_rgba[:,  3] = atm_alpha
+            self.markers_atmosphere.set_data(
+                pos=pos, face_color=atm_rgba, size=atm_size, edge_width=0,
+            )
+        else:
+            self.markers_atmosphere.set_data(
+                pos=np.zeros((1, 3), dtype=np.float32),
+                face_color=(0.0, 0.0, 0.0, 0.0),
+                size=1, edge_width=0,
+            )
 
         # --- Selection ring + info text ------------------------------------
         sel = self._selected
@@ -745,6 +828,23 @@ class Viewer:
             f'speed: {speed:.1f}',
             f'bonds: {w.bond_counts[i]}' + (f'  → {" ".join(bonded)}' if bonded else ''),
         ]
+
+        # Composition breakdown for accreted bodies (Phase 3) — shows the
+        # mass fractions of every absorbed element. A pristine atom has
+        # 100% of its own element; an accreted body has a mix that drove
+        # its rendered colour.
+        comp = w.composition[i]
+        total = comp.sum()
+        if total > 0 and mass_ratio >= 1.5:                 # only worth showing for accreted bodies
+            mass_fractions = comp / total
+            top = sorted(
+                ((ELEMENTS_LIST[k].symbol, float(mass_fractions[k]))
+                 for k in range(len(ELEMENTS_LIST)) if mass_fractions[k] > 0.01),
+                key=lambda kv: -kv[1],
+            )[:5]
+            if top:
+                comp_str = ' '.join(f'{s}:{f*100:.0f}%' for s, f in top)
+                lines.append(f'comp:  {comp_str}')
 
         # Molecule membership — if this atom is part of a bonded cluster,
         # show the formula and (where known) the common name.

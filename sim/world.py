@@ -52,6 +52,12 @@ class World:
         self.elem_ids    = np.zeros(cap,       dtype=np.int32)   # index into ELEMENTS_LIST
         self.bond_counts = np.zeros(cap,       dtype=np.int32)
         self.ionized     = np.zeros(cap,       dtype=bool)       # plasma flag
+        # Per-particle composition history: how much mass of each element
+        # this body has accreted. For a freshly injected atom this is just
+        # its own element. For an accreted body it grows as it absorbs more
+        # material; for a fusion product it resets to the product nucleus.
+        # Drives Phase-3 planetary differentiation rendering.
+        self.composition = np.zeros((cap, len(ELEMENTS_LIST)), dtype=np.float64)
 
         self._cap = cap
         self.n: int = 0
@@ -87,6 +93,11 @@ class World:
             z[:self._cap] = arr
             return z
 
+        def _extN(arr: np.ndarray) -> np.ndarray:
+            z = np.zeros((new_cap, arr.shape[1]), dtype=arr.dtype)
+            z[:self._cap] = arr
+            return z
+
         self.positions   = _ext2(self.positions)
         self.velocities  = _ext2(self.velocities)
         self.forces_cur  = _ext2(self.forces_cur)
@@ -95,6 +106,7 @@ class World:
         self.elem_ids    = _ext1(self.elem_ids)
         self.bond_counts = _ext1(self.bond_counts)
         self.ionized     = _ext1(self.ionized)
+        self.composition = _extN(self.composition)
         self._cap = new_cap
 
     # ------------------------------------------------------------------
@@ -113,6 +125,9 @@ class World:
         self.elem_ids[i]    = SYMBOL_TO_ID[element.symbol]
         self.bond_counts[i] = 0
         self.ionized[i]     = False
+        # Composition starts as pure of this element
+        self.composition[i, :]       = 0.0
+        self.composition[i, SYMBOL_TO_ID[element.symbol]] = element.mass
         self.n += 1
         self.total_injected += 1
         return i
@@ -138,6 +153,7 @@ class World:
             self.elem_ids[i]    = self.elem_ids[last]
             self.bond_counts[i] = self.bond_counts[last]
             self.ionized[i]     = self.ionized[last]
+            self.composition[i] = self.composition[last]
             for b in self.bonds:
                 if b.i == last: b.i = i
                 if b.j == last: b.j = i

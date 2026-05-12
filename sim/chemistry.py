@@ -38,7 +38,7 @@ from __future__ import annotations
 import numpy as np
 
 from sim.elements import (
-    ELEMENTS, ELEMENTS_LIST,
+    ELEMENTS, ELEMENTS_LIST, SYMBOL_TO_ID,
     ATOMIC_NUMBERS_Z, MASS_NUMBERS_A,
     pauling_bond_energy_kjmol,
 )
@@ -283,6 +283,12 @@ def _fuse(world) -> None:
         new_idx   = world.add_particle(prod_elem, com_pos, com_vel)
         world.total_fusions += 1
         world.masses[new_idx] = m_total   # conserve mass
+        # Composition: fusion is a nuclear rebirth — the product is *pure*
+        # of its element, with mass equal to the conserved m_total (which
+        # differs slightly from prod_elem.mass by the small Q-value defect).
+        prod_id = SYMBOL_TO_ID[product_sym]
+        world.composition[new_idx, :]       = 0.0
+        world.composition[new_idx, prod_id] = m_total
 
     if fusion_sites:
         _apply_radiation_kicks(world, fusion_sites)
