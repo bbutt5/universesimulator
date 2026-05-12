@@ -162,3 +162,14 @@ renderer:
   # blackbody-RGB function and Stefan-Boltzmann halo sizing use this mapping;
   # the value here corresponds to a hot B-class star photosphere.
   reference_temperature_K: 20000.0
+
+  # Reflected-illumination albedo: fraction of received starlight that
+  # scatters back toward the observer.  Real interstellar dust albedo
+  # is 0.6–0.8 in the visual (Calzetti 2001); 0.7 is the standard value.
+  illumination_albedo: 0.7
+
+  # HDR exposure (Reinhard tone-mapping operator). Higher exposure brightens
+  # dim sources; lower exposure prevents bright sources from clipping. Same
+  # control a photographer uses. Real long-exposure astrophotography uses
+  # very high effective exposure to bring out dim nebulae.
+  render_exposure: 5.0

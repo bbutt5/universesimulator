@@ -64,6 +64,7 @@ from vispy.visuals.transforms import STTransform
 
 from sim.diagnostics import kinetic_energy, gravitational_pe, linear_momentum
 from sim.elements import ELEMENTS_LIST
+from sim.illumination import compute_received_rgb_flux
 from sim.molecules import identify_molecules, molecule_counts
 from sim.states import state_counts
 from sim.world import World
@@ -348,36 +349,70 @@ class Viewer:
             astro[:, :3] = bb_rgb
             self.markers.set_data(pos=pos, face_color=astro, size=sizes, edge_width=0)
 
-        # --- Stefan-Boltzmann halo sizing ---------------------------------
-        # L ∝ T⁴ (Stefan-Boltzmann radiative output)
-        # Apparent halo radius r ∝ √L ∝ T²
-        # We use the dimensionless temperature ratio (T / T_ref) so the
-        # value is well-scaled across the sim's calibration.
-        ref_T_K = float(getattr(cfg, 'reference_temperature_K', 20000.0))
-        T_ratio = np.clip(T_K / ref_T_K, 0.0, 5.0)        # cap at 5× ref to avoid blowing up
-        radiation_gain = (T_ratio ** 2).astype(np.float32) * _HALO_RADIATION_GAIN
+        # --- Self-emission RGB flux (real Stefan-Boltzmann) ---------------
+        # L_self ∝ T⁴. Multiplied by the particle's own Planck blackbody RGB
+        # gives an RGB-valued flux. This is what the particle radiates.
+        ref_T_K  = float(getattr(cfg, 'reference_temperature_K', 20000.0))
+        T_ratio  = (T_K / ref_T_K).astype(np.float32)
+        L_self   = T_ratio ** 4                            # (N,) dimensionless luminosity
+        rgb_self = bb_rgb * L_self[:, None]                # (N, 3) self-emission flux
 
-        # Accreted bodies have larger physical surface area → larger halo
+        # --- Received illumination (inverse-square from all hot emitters) -
+        # Real photon-transport-without-rays: each hot particle is treated
+        # as a point source, flux Φ = L/(4πr²) is summed over every other
+        # particle. Reflection-nebula colouring (gas takes on the star's
+        # colour) emerges naturally because each source contributes its own
+        # blackbody RGB to the receiver.
+        albedo = float(getattr(cfg, 'illumination_albedo', 0.7))
+        rgb_received = compute_received_rgb_flux(
+            pos, T_K, self._blackbody_rgb, ref_T_K,
+        )
+
+        # --- Total flux = own emission + reflected illumination ----------
+        # Bodies (planets / stars) get more emitting surface area → boosted self.
         body_mul = np.ones(n, dtype=np.float32)
         body_mask = planet_mask | star_mask
         if body_mask.any():
             body_mul[body_mask] = _BODY_HALO_MUL
+        rgb_total = rgb_self * body_mul[:, None] + albedo * rgb_received
 
-        # Inner halo: small fixed offset + Stefan-Boltzmann radiation gain
-        inner_size = (sizes * (_HALO_BASE_SIZE_MUL + radiation_gain * 0.5) * body_mul).astype(np.float32)
-        # Outer halo: 2.2× the inner — captures the dim wings of the bloom
+        # Raw scalar luminance (BT.601 perceptual weights) — drives halo size
+        # before tone-mapping, because the *physical* radiated power sets the
+        # apparent angular extent (Stefan-Boltzmann), not the camera response.
+        luminance_raw = (0.299 * rgb_total[:, 0]
+                         + 0.587 * rgb_total[:, 1]
+                         + 0.114 * rgb_total[:, 2]).astype(np.float32)
+        sqrt_lum_raw = np.sqrt(np.maximum(luminance_raw, 0.0))
+
+        # --- HDR tone mapping (Reinhard) ---------------------------------
+        # L_displayed = exposure · L_raw / (1 + exposure · L_raw)
+        # Real-camera response: linear at low flux, asymptotic to 1 at high.
+        # Bright fusing cores don't clip to white; dim gas isn't crushed black.
+        # The single "exposure" knob is the same one a photographer dials.
+        exposure = float(getattr(cfg, 'render_exposure', 5.0))
+        e_rgb = exposure * rgb_total
+        rgb_displayed = (e_rgb / (1.0 + e_rgb)).astype(np.float32)
+
+        # Halo size: from raw (physical) luminance, not tone-mapped value
+        inner_size = (sizes * (_HALO_BASE_SIZE_MUL
+                               + sqrt_lum_raw * _HALO_RADIATION_GAIN)).astype(np.float32)
         outer_size = (inner_size * 2.2).astype(np.float32)
 
-        # Alpha scales linearly with T_ratio (perceptual brightness) plus a
-        # cool floor so cold particles aren't completely invisible.
-        inner_alpha = np.clip(_HALO_INNER_ALPHA * (0.5 + T_ratio), 0.0, 1.0).astype(np.float32)
-        outer_alpha = np.clip(_HALO_OUTER_ALPHA * (0.5 + T_ratio), 0.0, 0.5).astype(np.float32)
+        # Halo colour: tone-mapped RGB (carries colour AND brightness)
+        # Halo alpha: tone-mapped luminance with a soft floor
+        disp_luminance = (0.299 * rgb_displayed[:, 0]
+                          + 0.587 * rgb_displayed[:, 1]
+                          + 0.114 * rgb_displayed[:, 2]).astype(np.float32)
+        inner_alpha = np.clip(_HALO_INNER_ALPHA + 0.7 * disp_luminance, 0.0, 1.0)
+        outer_alpha = np.clip(_HALO_OUTER_ALPHA + 0.3 * disp_luminance, 0.0, 0.7)
 
-        halo_rgba = np.ones((n, 4), dtype=np.float32)
-        halo_rgba[:, :3] = bb_rgb
+        inner_rgba = np.ones((n, 4), dtype=np.float32)
+        inner_rgba[:, :3] = rgb_displayed
+        inner_rgba[:,  3] = inner_alpha
 
-        inner_rgba = halo_rgba.copy(); inner_rgba[:, 3] = inner_alpha
-        outer_rgba = halo_rgba.copy(); outer_rgba[:, 3] = outer_alpha
+        outer_rgba = np.ones((n, 4), dtype=np.float32)
+        outer_rgba[:, :3] = rgb_displayed
+        outer_rgba[:,  3] = outer_alpha
 
         self.markers_inner_glow.set_data(
             pos=pos, face_color=inner_rgba, size=inner_size, edge_width=0,
