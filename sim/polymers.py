@@ -48,7 +48,10 @@ ring_sizes
     a textbook construction (Diestel §1.9): one cycle per non-tree edge,
     formed by adding that edge to the tree path between its endpoints.
     Useful for tagging biologically-significant ring sizes (5 for
-    ribose / pyrrole, 6 for benzene / pyrimidine / purine).
+    ribose / pyrrole / imidazole, 6 for benzene / pyrimidine / purine).
+    The cycle *vertex sets* (not just their lengths) are kept internally
+    so motif recognition can check element composition inside the ring
+    itself — see the nucleotide-like motif below.
 
 Motifs
 ------
@@ -68,12 +71,16 @@ X" rather than "this is an X".
       because picking the central α-carbon requires bond-angle data.
 
   ``nucleotide-like``
-      Same connected component contains:
-      (a) a ring of size 5 or 6 with at least one C *and* at least one
-          N (the pyrimidine/purine fingerprint — Lehninger §8.1);
-      (b) at least one P atom (the phosphate placeholder; real
-          nucleotides have a PO₄³⁻ group, but we don't yet model
-          formal charges).
+      The component contains
+      (a) a fundamental cycle of size 5 or 6 whose **vertex set itself**
+          contains at least one C *and* at least one N (the
+          pyrimidine / purine / imidazole / pyrrole fingerprint —
+          Lehninger §8.1); checking ring composition rather than the
+          surrounding component matters because a pure-carbon ring
+          with an external amine is *not* a nucleobase analogue.
+      (b) at least one P atom anywhere in the same component (the
+          phosphate placeholder; real nucleotides carry a PO₄³⁻ group,
+          but formal charges aren't modelled yet).
 
 References
 ----------
@@ -175,14 +182,25 @@ def _diameter_atoms(component: list[int], adj: list[list[int]]) -> int:
 # Diestel §1.9: given any spanning tree of a connected graph, the set of
 # fundamental cycles (one per non-tree edge, formed by adding the edge to
 # the tree path between its endpoints) forms a basis of the cycle space.
-# The number of such cycles is exactly the cyclomatic number r = E−V+1
-# for each connected component.  We count them by iterative DFS, recording
-# the cycle length whenever we cross a back-edge (to a strict ancestor).
-# Each back-edge is naturally counted once because we only register the
-# cycle when the deeper endpoint sees the shallower one.
+# The count equals the cyclomatic number r = E−V+1 per component, and
+# the vertex set of each fundamental cycle is exactly the atoms it
+# contains.  We need the vertex sets (not just lengths) so motif
+# recognition can check the *contents* of a candidate ring — e.g.
+# "5/6-ring with both C and N" — rather than just "such a ring exists
+# somewhere in this component".
+#
+# Iterative DFS, recording one cycle per back-edge encountered (avoids
+# double-counting by only acting when the deeper endpoint sees the
+# strictly-shallower ancestor).
 # ---------------------------------------------------------------------------
 
-def _fundamental_ring_sizes(component: list[int], adj: list[list[int]]) -> list[int]:
+def _fundamental_cycles(component: list[int], adj: list[list[int]]) -> list[list[int]]:
+    """Return fundamental cycle vertex lists for this component.
+
+    Each returned list is the closed loop of atom indices traversed
+    by adding one non-tree edge to the DFS spanning tree. The number
+    of returned cycles equals the cyclomatic complexity r = E−V+1.
+    """
     if len(component) < 3:
         return []                                  # need ≥ 3 atoms for a cycle
     members = set(component)
@@ -191,7 +209,7 @@ def _fundamental_ring_sizes(component: list[int], adj: list[list[int]]) -> list[
     depth: dict[int, int] = {start: 0}
     parent: dict[int, int] = {start: -1}
     stack: list[tuple[int, list[int], int]] = [(start, list(adj[start]), 0)]
-    rings: list[int] = []
+    cycles: list[list[int]] = []
 
     while stack:
         u, nbrs, idx = stack[-1]
@@ -205,16 +223,23 @@ def _fundamental_ring_sizes(component: list[int], adj: list[list[int]]) -> list[
         if v == parent[u]:
             continue
         if v in depth:
-            # Back-edge — count the cycle only when v is strictly shallower
-            # (avoids double-counting the same back-edge from both endpoints)
+            # Back-edge — record the cycle only when v is strictly
+            # shallower (avoids double-counting the same back-edge from
+            # both endpoints). The cycle vertex list is walked up the
+            # parent chain from u to v inclusive.
             if depth[v] < depth[u]:
-                rings.append(depth[u] - depth[v] + 1)
+                cycle = [u]
+                cur = u
+                while cur != v:
+                    cur = parent[cur]
+                    cycle.append(cur)
+                cycles.append(cycle)
         else:
             depth[v] = depth[u] + 1
             parent[v] = u
             stack.append((v, list(adj[v]), 0))
 
-    return rings
+    return cycles
 
 
 # ---------------------------------------------------------------------------
@@ -230,10 +255,13 @@ def _detect_motifs(
     world,
     adj: list[list[int]],
     bond_orders: dict[tuple[int, int], int],
-    ring_sizes: list[int],
+    cycles: list[list[int]],
 ) -> tuple[str, ...]:
-    syms = [ELEMENTS_LIST[world.elem_ids[i]].symbol for i in component]
-    sym_set = set(syms)
+    """Return graph-only motif tags for one connected component."""
+    syms: dict[int, str] = {
+        i: ELEMENTS_LIST[world.elem_ids[i]].symbol for i in component
+    }
+    sym_set = set(syms.values())
 
     motifs: list[str] = []
 
@@ -244,10 +272,10 @@ def _detect_motifs(
     if 'N' in sym_set and 'C' in sym_set:
         has_carbonyl = False
         for i in component:
-            if ELEMENTS_LIST[world.elem_ids[i]].symbol != 'C':
+            if syms[i] != 'C':
                 continue
             for j in adj[i]:
-                if ELEMENTS_LIST[world.elem_ids[j]].symbol != 'O':
+                if syms.get(j) != 'O':
                     continue
                 key = (min(i, j), max(i, j))
                 if bond_orders.get(key, 1) >= 2:
@@ -259,20 +287,21 @@ def _detect_motifs(
             motifs.append('amino-acid-like')
 
     # ---- nucleotide-like ------------------------------------------------
-    # Pyrimidine/purine fingerprint: a 5- or 6-membered ring containing
-    # both C and N, plus a P atom anywhere in the component (phosphate
-    # placeholder).  Lehninger 6e §8.1.
-    if 'P' in sym_set and ring_sizes:
-        cn_ring_found = False
-        if any(s in (5, 6) for s in ring_sizes):
-            # Cheaper-but-sufficient surrogate: a candidate ring of the
-            # right size exists, and the component already contains both
-            # C and N. Checking that the actual atoms of the ring are
-            # specifically C+N would require enumerating cycle vertices —
-            # for our coarseness budget this surrogate is good enough.
-            cn_ring_found = ('C' in sym_set) and ('N' in sym_set)
-        if cn_ring_found:
-            motifs.append('nucleotide-like')
+    # Pyrimidine / purine / imidazole / pyrrole fingerprint:
+    #   * a fundamental cycle of size 5 or 6 whose *own vertex set*
+    #     contains at least one C and at least one N (so a pure-carbon
+    #     ring with an external amine does NOT match — checking the
+    #     component as a whole would be a false positive);
+    #   * plus a P atom somewhere in the component (phosphate placeholder).
+    # Lehninger 6e §8.1.
+    if 'P' in sym_set:
+        for cycle in cycles:
+            if len(cycle) not in (5, 6):
+                continue
+            ring_syms = {syms[v] for v in cycle}
+            if 'C' in ring_syms and 'N' in ring_syms:
+                motifs.append('nucleotide-like')
+                break
 
     return tuple(motifs)
 
@@ -318,9 +347,9 @@ def identify_polymers(world) -> list[Polymer]:
 
         chain_length = _diameter_atoms(comp, adj)
         branches = sum(1 for i in comp if len(adj[i]) >= 3)
-        ring_sizes = _fundamental_ring_sizes(comp, adj)
-        rings = len(ring_sizes)
-        motifs = _detect_motifs(comp, world, adj, bond_orders, ring_sizes)
+        cycles = _fundamental_cycles(comp, adj)
+        ring_sizes = tuple(sorted(len(c) for c in cycles))
+        motifs = _detect_motifs(comp, world, adj, bond_orders, cycles)
 
         polymers.append(Polymer(
             formula=formula,
@@ -328,8 +357,8 @@ def identify_polymers(world) -> list[Polymer]:
             indices=tuple(sorted(comp)),
             chain_length=chain_length,
             branches=branches,
-            rings=rings,
-            ring_sizes=tuple(sorted(ring_sizes)),
+            rings=len(cycles),
+            ring_sizes=ring_sizes,
             motifs=motifs,
         ))
 
