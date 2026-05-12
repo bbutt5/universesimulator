@@ -139,7 +139,8 @@ class World:
         for b in self.bonds:
             if b.i == i or b.j == i:
                 other = b.j if b.i == i else b.i
-                self.bond_counts[other] = max(0, self.bond_counts[other] - 1)
+                # Free the matching valence — decrement by the bond's order
+                self.bond_counts[other] = max(0, self.bond_counts[other] - b.order)
             else:
                 surviving.append(b)
         self.bonds = surviving

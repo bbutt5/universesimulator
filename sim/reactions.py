@@ -105,11 +105,17 @@ def update(world) -> None:
 
         elem_i = ELEMENTS_LIST[elem_ids[i]]
         elem_j = ELEMENTS_LIST[elem_ids[j]]
-        d_ij   = pauling_bond_energy_kjmol(elem_i, elem_j)
-        if d_ij <= 0.0:
+        bond_order = bond.order
+        d_ij_single = pauling_bond_energy_kjmol(elem_i, elem_j)
+        if d_ij_single <= 0.0:
             continue
+        # Order-corrected bond energies for the ΔE comparison (same multiplier
+        # for old and new, since we preserve order through the swap).
+        order_factor = {1: 1.0, 2: 1.8, 3: 2.4}.get(bond_order, 1.0)
+        d_ij = d_ij_single * order_factor
 
         # Search for the most-exothermic alternative partner k near i.
+        # Restriction: k must have enough free valence for the same bond order.
         best: tuple[int, float, float] | None = None       # (k, delta_e, d_ik)
         for k in neighbors(i, pos, grid, radius):
             if k in (i, j):
@@ -119,10 +125,14 @@ def update(world) -> None:
                 continue
 
             elem_k = ELEMENTS_LIST[elem_ids[k]]
-            if elem_k.max_bonds == 0 or world.bond_counts[k] >= elem_k.max_bonds:
+            if elem_k.max_bonds == 0:
+                continue
+            # Must have free valence ≥ bond_order
+            if elem_k.max_bonds - world.bond_counts[k] < bond_order:
                 continue
 
-            d_ik = pauling_bond_energy_kjmol(elem_i, elem_k)
+            d_ik_single = pauling_bond_energy_kjmol(elem_i, elem_k)
+            d_ik = d_ik_single * order_factor
             delta_e = d_ik - d_ij
             if delta_e > 0.0 and (best is None or delta_e > best[1]):
                 best = (k, delta_e, d_ik)
@@ -136,14 +146,13 @@ def update(world) -> None:
         if rng.random() >= p_swap:
             continue
 
-        # ---- Perform the swap ----------------------------------------
-        # Break i—j: j loses a bond. k gains one. i is unchanged.
-        world.bond_counts[j] = max(0, world.bond_counts[j] - 1)
-        world.bond_counts[k] += 1
+        # ---- Perform the swap (preserving bond order) ----------------
+        world.bond_counts[j] = max(0, world.bond_counts[j] - bond_order)
+        world.bond_counts[k] += bond_order
 
         r_eq    = elem_i.covalent_radius + ELEMENTS_LIST[elem_ids[k]].covalent_radius
         d_e_sim = energy_scale * d_ik
-        new_bonds.append(Bond(i, k, r_eq, d_e_sim, spring_const))
+        new_bonds.append(Bond(i, k, r_eq, d_e_sim, spring_const, order=bond_order))
         consumed.add(bond_idx)
 
         bonded_pairs.discard((min(i, j), max(i, j)))

@@ -46,6 +46,13 @@ from sim.nuclear import coulomb_barriers_matrix, find_fusion_product, gamow_fact
 from sim.particle import Bond
 from sim.spatial import build_grid, neighbors
 
+# Bond-order multipliers on the single-bond dissociation energy.
+# Real chemistry: D(C=C)/D(C-C) ≈ 1.77; D(C≡C)/D(C-C) ≈ 2.42 (CRC Handbook).
+# These are pair-averaged values; individual pairs vary (D(N≡N)/D(N-N) ≈ 5.6
+# because N-N single bond is unusually weak), but the multipliers below are
+# representative within ~20% for typical organic / inorganic combinations.
+_BOND_ORDER_D_FACTOR = {1: 1.0, 2: 1.8, 3: 2.4}
+
 
 # ------------------------------------------------------------------
 # Public entry point
@@ -70,16 +77,17 @@ def _break_bonds(world) -> None:
 
     keep = []
     for bond in world.bonds:
-        i, j = bond.i, bond.j
+        i, j   = bond.i, bond.j
+        order  = bond.order                 # 1 / 2 / 3 — free up matching valence
         # Ionisation strips electrons → covalent bond cannot survive
         if ionized[i] or ionized[j]:
-            world.bond_counts[i] = max(0, world.bond_counts[i] - 1)
-            world.bond_counts[j] = max(0, world.bond_counts[j] - 1)
+            world.bond_counts[i] = max(0, world.bond_counts[i] - order)
+            world.bond_counts[j] = max(0, world.bond_counts[j] - order)
             continue
         r = float(np.linalg.norm(pos[j] - pos[i]))
         if r > threshold * bond.length_eq:
-            world.bond_counts[i] = max(0, world.bond_counts[i] - 1)
-            world.bond_counts[j] = max(0, world.bond_counts[j] - 1)
+            world.bond_counts[i] = max(0, world.bond_counts[i] - order)
+            world.bond_counts[j] = max(0, world.bond_counts[j] - order)
         else:
             keep.append(bond)
     world.bonds = keep
@@ -151,16 +159,24 @@ def _form_bonds(world) -> None:
             if rel_v > v_thresh:
                 continue
 
+            # Bond order: take as much as both atoms can support, up to triple.
+            free_i = elem_i.max_bonds - bond_counts[i]
+            free_j = elem_j.max_bonds - bond_counts[j]
+            order  = min(free_i, free_j, 3)
+            if order <= 0:
+                continue
+
             # Pauling: D(A-B) = √(D_AA · D_BB) + 96·(χ_A − χ_B)²  [kJ/mol]
-            D_kjmol = pauling_bond_energy_kjmol(elem_i, elem_j)
-            D_e     = E_scale * D_kjmol           # sim energy units
+            # Then scale by bond-order factor (real D(C=C)/D(C-C) ≈ 1.77 etc.)
+            D_kjmol_single = pauling_bond_energy_kjmol(elem_i, elem_j)
+            D_e = E_scale * D_kjmol_single * _BOND_ORDER_D_FACTOR[order]
             if D_e < 1e-12:
                 continue
 
-            bond = Bond(i, j, r_eq, D_e, k)
+            bond = Bond(i, j, r_eq, D_e, k, order=order)
             world.bonds.append(bond)
-            world.bond_counts[i] += 1
-            world.bond_counts[j] += 1
+            world.bond_counts[i] += order
+            world.bond_counts[j] += order
             world.total_bonds_formed += 1
             bonded.add(key)
 
