@@ -56,6 +56,53 @@ _R0_FM = 1.2
 # CODATA: 1 atomic mass unit (amu) in MeV/c²
 AMU_TO_MEV = 931.494
 
+# Fine-structure constant (dimensionless, CODATA)
+_ALPHA_FS = 1.0 / 137.035999
+
+
+def gamow_factor(z1: float, a1: float, z2: float, a2: float,
+                 rel_ke_mev: float) -> float:
+    """Gamow tunnelling probability for two nuclei to fuse below the classical
+    Coulomb barrier.
+
+        P_tunnel  ∝  exp(−√(E_G / E_cm))
+
+    where E_G is the Gamow energy
+
+        E_G  =  (2 π α Z₁ Z₂)² · 2 μ c²
+
+    with α the fine-structure constant, μ the reduced mass (in MeV/c²), and
+    E_cm the centre-of-mass kinetic energy (in MeV).
+
+    Reference: Clayton, "Principles of Stellar Evolution and Nucleosynthesis"
+    §4.3; the standard WKB approximation for nuclear barrier penetration.
+
+    Real stellar fusion is dominated by this mechanism: the Sun's core is at
+    ~1.5 keV but the H+H Coulomb barrier is 0.6 MeV (400× higher) — fusion
+    proceeds via the long tunnelling tail.
+    """
+    if rel_ke_mev <= 0.0:
+        return 0.0
+    # Reduced mass in MeV/c² (1 amu·c² = 931.494 MeV)
+    mu_mev = (a1 * a2 / (a1 + a2)) * AMU_TO_MEV
+    # Gamow energy E_G = 2π² (α·Z₁·Z₂)² · μc² (Clayton §4.3)
+    e_g = 2.0 * (np.pi ** 2) * (_ALPHA_FS * z1 * z2) ** 2 * mu_mev
+    # Tunnelling probability ∝ exp(−√(E_G / E_cm))
+    return float(np.exp(-np.sqrt(e_g / rel_ke_mev)))
+
+
+def gamow_factor_sim(z1: float, a1: float, z2: float, a2: float,
+                     rel_ke_sim: float, sim_to_mev: float) -> float:
+    """Gamow tunnelling probability in simulator units.
+
+    Converts the simulator's reduced-mass KE into MeV using ``sim_to_mev``
+    (the only calibration knob, present because the sim runs in custom
+    time-scaled units), then evaluates the Gamow factor above.
+    """
+    if sim_to_mev <= 0.0:
+        return 0.0
+    return gamow_factor(z1, a1, z2, a2, rel_ke_sim * sim_to_mev)
+
 
 def fusion_q_amu(m_a: float, m_b: float, m_product: float) -> float:
     """Q-value (released rest-mass energy) of A + B → C, in amu.

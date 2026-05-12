@@ -42,7 +42,7 @@ from sim.elements import (
     ATOMIC_NUMBERS_Z, MASS_NUMBERS_A,
     pauling_bond_energy_kjmol,
 )
-from sim.nuclear import coulomb_barriers_matrix, find_fusion_product
+from sim.nuclear import coulomb_barriers_matrix, find_fusion_product, gamow_factor_sim
 from sim.particle import Bond
 from sim.spatial import build_grid, neighbors
 
@@ -222,12 +222,36 @@ def _fuse(world) -> None:
     barriers = coulomb_barriers_matrix(z_all, a_all, coulomb_scale)
     v_c      = barriers[pi, pj]
 
-    over_barrier = np.where(rel_ke >= v_c)[0]
+    # Two regimes:
+    #   1. Above the classical Coulomb barrier — fusion proceeds with P=1.
+    #   2. Below the barrier — fusion proceeds via Gamow quantum tunnelling
+    #      with probability ∝ exp(−√(E_G/E_cm)).  Stellar fusion is
+    #      dominated by this regime (the Sun's core is ~1.5 keV, the H+H
+    #      barrier is 0.6 MeV).
+    sim_to_mev = float(getattr(cfg, 'gamow_sim_to_mev', 0.0))
+    tunnel_strength = float(getattr(cfg, 'gamow_strength', 1.0))
+
+    candidate_mask = rel_ke >= v_c
+    if sim_to_mev > 0.0 and tunnel_strength > 0.0:
+        # Stochastic accept for sub-barrier pairs (Gamow tunnelling)
+        rng = np.random.default_rng(int(world.time * 1e6) + 1)
+        for h in np.where(rel_ke < v_c)[0]:
+            i_local = pi[h]
+            j_local = pj[h]
+            p_tunnel = gamow_factor_sim(
+                z_all[i_local], a_all[i_local],
+                z_all[j_local], a_all[j_local],
+                float(rel_ke[h]), sim_to_mev,
+            )
+            if rng.random() < tunnel_strength * p_tunnel:
+                candidate_mask[h] = True
+
+    over_barrier = np.where(candidate_mask)[0]
     if len(over_barrier) == 0:
         return
 
     # Process most-energetic pairs first so the biggest fusions happen
-    over_barrier = over_barrier[np.argsort(-(rel_ke[over_barrier] - v_c[over_barrier]))]
+    over_barrier = over_barrier[np.argsort(-rel_ke[over_barrier])]
 
     used:   set[int] = set()
     events: list[tuple[int, int, str]] = []

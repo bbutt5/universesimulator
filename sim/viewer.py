@@ -399,9 +399,35 @@ class Viewer:
             ke, mass_ratios, planet_mask, star_mask, cfg,
         )
 
-        # Blackbody RGB at the particle's temperature — this is the real
-        # colour the radiation would have to a human observer.
-        bb_rgb = self._blackbody_rgb(T_K)
+        # --- Doppler + Hubble redshift on the rendered colour --------------
+        # A source moving radially away from the observer is red-shifted; one
+        # approaching is blue-shifted. Wien's displacement says λ·T = const,
+        # so the apparent blackbody temperature is
+        #     T_apparent = T_emitted / (1 + v_radial / c)
+        # In our sim the particle's velocity already contains the Hubble
+        # expansion term as well as any kinematic motion, so the same
+        # formula handles cosmological redshift too. (At our regime the
+        # GR distinction is sub-percent and absorbed into the calibrated
+        # ``speed_of_light_sim`` constant.)
+        cam_pos = self._camera_position_world()
+        c_sim   = float(getattr(cfg, 'speed_of_light_sim', 0.0))
+        if c_sim > 0.0 and cam_pos is not None:
+            rel        = w.positions[:n] - cam_pos[None, :]
+            dist       = np.linalg.norm(rel, axis=1)
+            dist_safe  = np.maximum(dist, 1e-6)
+            unit_out   = rel / dist_safe[:, None]
+            v_radial   = np.einsum('ij,ij->i', w.velocities[:n], unit_out)
+            shift_factor = 1.0 + v_radial / c_sim
+            # Clip below tiny positive to avoid divide-by-zero / negative T
+            T_K_seen   = T_K / np.clip(shift_factor, 1e-3, None)
+        else:
+            T_K_seen   = T_K
+
+        # Blackbody RGB at the *apparent* (Doppler-shifted) temperature —
+        # this is the real colour reaching the observer after the relativistic
+        # frame shift.  Inter-particle illumination still uses the rest-frame
+        # T_K below (the receiver doesn't sit in the camera's frame).
+        bb_rgb = self._blackbody_rgb(T_K_seen)
 
         # --- Astronomy palette mode replaces the *core* colour with the
         # blackbody colour as well. The halo colour is always blackbody,
@@ -442,8 +468,13 @@ class Viewer:
         # Cold gas between an emitter and the observer absorbs / scatters
         # photons:  F_obs = F_emitted · exp(−τ).  Produces dark-nebula
         # silhouettes (Horsehead, Coalsack) when dense cold clouds sit in
-        # front of bright sources.
-        cam_pos = self._camera_position_world()
+        # front of bright sources.  Uses the cam_pos computed earlier for
+        # the Doppler shift.
+        #
+        # Wavelength-dependent ("reddening"): blue is absorbed more than
+        # red in real interstellar dust (Fitzpatrick 1999 extinction curve).
+        # We apply per-RGB-channel optical depths via the extinction_rgb_weights
+        # vector — same exp(−τ) but with different τ per colour.
         if cam_pos is not None:
             opacity_base = float(getattr(cfg, 'extinction_opacity', 0.05))
             kernel_sigma = float(getattr(cfg, 'extinction_kernel_sigma', 30.0))
@@ -453,7 +484,22 @@ class Viewer:
                 base_opacity=opacity_base,
             )
             visibility = compute_visibility(pos, optical_d, cam_pos, kernel_sigma)
-            rgb_total = rgb_total * visibility[:, None]
+
+            rgb_weights = getattr(cfg, 'extinction_rgb_weights', None)
+            if rgb_weights is not None:
+                # exp(−τ_channel · weight_channel) per RGB.  Equivalent to:
+                #     visibility_channel = visibility ** weight_channel
+                w_arr = np.array(rgb_weights, dtype=np.float32)
+                if w_arr.shape == (3,):
+                    vis_r = visibility ** w_arr[0]
+                    vis_g = visibility ** w_arr[1]
+                    vis_b = visibility ** w_arr[2]
+                    visibility_rgb = np.stack([vis_r, vis_g, vis_b], axis=1)
+                    rgb_total = rgb_total * visibility_rgb
+                else:
+                    rgb_total = rgb_total * visibility[:, None]
+            else:
+                rgb_total = rgb_total * visibility[:, None]
 
         # Raw scalar luminance (BT.601 perceptual weights) — drives halo size
         # before tone-mapping, because the *physical* radiated power sets the

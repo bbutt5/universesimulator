@@ -34,7 +34,8 @@ def cfg():
         'thermal': {
             'pressure_constant': 0.4,
             'pressure_cutoff': 200.0,
-            'vdw_strength': 25.0,
+            'vdw_strength': 25.0,        # legacy fallback for tests
+            'vdw_dispersion_scale': 0.0,  # new London scale (off in tests by default)
             'vdw_cutoff':   300.0,
             # Scale chosen so H ionises at KE = 13.598 × 7355 ≈ 100k sim units,
             # matching the pre-physicalisation test calibration. He's threshold
@@ -54,6 +55,8 @@ def cfg():
             'coulomb_barrier_scale': 1.0,
             'fusion_enabled': True,
             'q_value_scale': 1.0,
+            'gamow_sim_to_mev': 0.0,    # Gamow OFF in tests by default
+            'gamow_strength':   0.0,
             'radiation_radius': 500.0,
             'radiation_energy_scale': 100.0,
         },

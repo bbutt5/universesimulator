@@ -30,7 +30,12 @@ thermal:
   # thermal pressure: cold pair → VdW wins → condense; hot pair → pressure
   # wins → vapourise.
   # --------------------------------------------------------------------------
-  vdw_strength: 25.0           # k_vdw: attractive strength (force ∝ k / r²)
+  # London dispersion uses real polarisabilities (α, in Å³, CRC §10) and
+  # ionisation energies (eV, NIST ASD) per element via
+  #     U(r) = − C₆ / r⁶,   C₆ = (3/2) · α₁ α₂ · I₁ I₂ / (I₁ + I₂)
+  # The single scale below is a unit conversion from natural-units C₆ to
+  # the simulator's force units.  Setting it to 0 disables London VdW.
+  vdw_dispersion_scale: 2.5e10
   vdw_cutoff:   300.0          # max range (SU); inside covalent r_min skipped
 
   # --------------------------------------------------------------------------
@@ -70,6 +75,17 @@ chemistry:
   # Gamow tunnelling is NOT yet modelled — tracked on issue #11.
   coulomb_barrier_scale: 9600.0   # sim KE × fm  (calibrates H+H barrier ≈ 4000)
   fusion_enabled: true
+
+  # Gamow quantum tunnelling — allows fusion BELOW the classical Coulomb
+  # barrier via the WKB tunnelling probability
+  #     P ∝ exp(−√(E_G / E_cm))
+  # which is how stellar fusion actually proceeds at temperatures far
+  # below the classical barrier height. Set gamow_strength to 0 to revert
+  # to classical-only above-barrier fusion.
+  # ``gamow_sim_to_mev`` is the only calibration: converts the sim's
+  # reduced-mass KE units into MeV for the Gamow energy formula.
+  gamow_sim_to_mev: 0.0001
+  gamow_strength:   1.0
 
   # Q-value scaling — converts (amu mass deficit) into sim KE units so the
   # energy-conservation check (rel_KE + Q ≥ 0) is dimensionally consistent.
@@ -195,3 +211,17 @@ renderer:
   # backed stars.  Set extinction_opacity to 0 to disable.
   extinction_opacity:    0.05    # per-particle optical-depth contribution
   extinction_kernel_sigma: 30.0  # perpendicular-distance falloff (SU)
+
+  # Wavelength-dependent extinction ("reddening"). Real interstellar dust
+  # absorbs short wavelengths (blue) more strongly than long (red), which
+  # is why stars seen through gas clouds look redder than they are. The
+  # vector here is (R, G, B) extinction efficiency multipliers — blue is
+  # absorbed ~1.5× more than red in the Galactic average (Fitzpatrick 1999).
+  extinction_rgb_weights: [0.7, 1.0, 1.5]
+
+  # Speed of light in simulator units. Used for Doppler / cosmological
+  # redshift on the rendered colour:
+  #     T_apparent  =  T_emitted / (1 + v_radial / c)
+  # A receding source appears redder, an approaching source bluer. Set
+  # to 0 to disable the redshift effect.
+  speed_of_light_sim: 20000.0

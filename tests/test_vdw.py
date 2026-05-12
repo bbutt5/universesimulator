@@ -101,6 +101,58 @@ class TestVdWInhibitors:
         np.testing.assert_array_equal(forces, 0.0)
 
 
+class TestLondonDispersion:
+    """The new vdw_dispersion_scale path uses the real London formula:
+        C₆ = (3/2) α₁ α₂ · I₁·I₂/(I₁+I₂)
+        F  = 6 C₆ / r⁷
+    All inputs are measured atomic data (polarisability + first IE)."""
+
+    def test_london_force_falls_off_as_one_over_r_seven(self, cfg):
+        """Doubling the distance should reduce the force by 2⁷ = 128×."""
+        cfg.thermal.vdw_strength = 0.0       # disable legacy
+        cfg.thermal.vdw_dispersion_scale = 1e10   # enable London
+        def f_at(sep):
+            w = World(cfg)
+            _place(w, 'He', [0.0, 0.0, 0.0])
+            _place(w, 'He', [sep, 0.0, 0.0])
+            forces = np.zeros((w.n, 3))
+            add_vdw_forces(w, forces)
+            return abs(forces[0, 0])
+        f_short = f_at(100.0)
+        f_long  = f_at(200.0)
+        assert f_short > 0
+        assert f_long  > 0
+        # 2⁷ = 128; allow numerical slack
+        assert f_short / f_long == pytest.approx(128.0, rel=0.01)
+
+    def test_london_stronger_for_more_polarisable_pair(self, cfg):
+        """At the same distance, a more polarisable pair has stronger
+        attraction. C (α=1.76 Å³) > F (α=0.557 Å³), so C-C > F-F."""
+        cfg.thermal.vdw_strength = 0.0
+        cfg.thermal.vdw_dispersion_scale = 1e10
+        def f_pair(sym, sep=200.0):
+            w = World(cfg)
+            _place(w, sym, [0.0, 0.0, 0.0])
+            _place(w, sym, [sep, 0.0, 0.0])
+            forces = np.zeros((w.n, 3))
+            add_vdw_forces(w, forces)
+            return abs(forces[0, 0])
+        # Both elements have r_min < 200 (C rc=77, F rc=57) so VdW is active
+        f_c = f_pair('C')
+        f_f = f_pair('F')
+        assert f_c > f_f
+
+    def test_disabled_when_scale_zero(self, cfg):
+        cfg.thermal.vdw_strength = 0.0
+        cfg.thermal.vdw_dispersion_scale = 0.0
+        w = World(cfg)
+        _place(w, 'He', [0.0,   0.0, 0.0])
+        _place(w, 'He', [150.0, 0.0, 0.0])
+        forces = np.zeros((w.n, 3))
+        add_vdw_forces(w, forces)
+        np.testing.assert_array_equal(forces, 0.0)
+
+
 class TestVdWvsThermalPressure:
     """The two forces should oppose each other: VdW wins when cold, thermal
     pressure wins when hot."""
