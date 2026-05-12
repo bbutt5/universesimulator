@@ -70,6 +70,11 @@ def cfg():
             'activation_energy_scale':  200.0,
             'heat_release_scale':         0.5,
         },
+        'outgassing': {
+            'rate_per_step':            0.0,    # OFF by default in tests
+            'temperature_threshold_K':  3000.0,
+            'light_element_mass_max':   5.0,
+        },
         'cosmology': {
             'hubble_initial': 0.01,
             'n_density_seeds': 3,

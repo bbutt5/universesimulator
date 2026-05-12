@@ -183,6 +183,17 @@ class Viewer:
         )
         self.markers_atmosphere.order = -3
 
+        # ---- Phase-3 dense core (heavy-element fraction) ----------------
+        # For bodies with substantial heavy-element content (Fe, Si, Ti, …),
+        # a smaller, more saturated marker is rendered ON TOP of the body
+        # to visualise the dense core — heavy elements naturally settle
+        # inward in a differentiated body (real gravitational stratification).
+        # The atmosphere halo + body + core layers together produce the
+        # crust-mantle-core appearance of a real planet.
+        self.markers_core = visuals.Markers(parent=self.view.scene)
+        self.markers_core.antialias = 1
+        self.markers_core.order = 1                # in front of the body marker
+
         # ---- primary markers (opaque cores) ------------------------------
         self.markers = visuals.Markers(parent=self.view.scene)
         self.markers.antialias = 1
@@ -286,6 +297,7 @@ class Viewer:
             self.markers_inner_glow.set_data(pos=zeros, face_color=transparent, size=1, edge_width=0)
             self.markers_nebula.set_data(pos=zeros, face_color=transparent, size=1, edge_width=0)
             self.markers_atmosphere.set_data(pos=zeros, face_color=transparent, size=1, edge_width=0)
+            self.markers_core.set_data(pos=zeros, face_color=transparent, size=1, edge_width=0)
             self._select_marker.set_data(pos=zeros, face_color=transparent, size=1, edge_width=0)
             self._info_text.text = ''
             self.lines.set_data(pos=np.zeros((2, 3)))
@@ -343,6 +355,9 @@ class Viewer:
         atmosphere_visible = np.zeros(n, dtype=bool)
         atmosphere_colors  = np.zeros((n, 3), dtype=np.float32)
         atmosphere_frac    = np.zeros(n, dtype=np.float32)
+        core_visible       = np.zeros(n, dtype=bool)
+        core_colors        = np.zeros((n, 3), dtype=np.float32)
+        core_frac          = np.zeros(n, dtype=np.float32)
         if body_mask.any():
             elem_cpk = np.array(
                 [e.color for e in ELEMENTS_LIST], dtype=np.float32,
@@ -386,6 +401,29 @@ class Viewer:
                 atmosphere_visible[atm_indices] = True
                 atmosphere_colors[atm_indices]  = atm_colors_body[has_atm]
                 atmosphere_frac[atm_indices]    = light_frac_body[has_atm].astype(np.float32)
+
+            # ---- Dense-core extraction (heavy-element rocky interior) ---
+            # Identify "heavy" elements (mass > 20 amu): Fe, Si, Ti, Ca, etc.
+            # If a body has ≥ 20% heavy content, render a smaller, denser
+            # core marker on top of it — real gravitational differentiation
+            # would settle these into the body's centre.
+            heavy_elem_mask = elem_masses_all > 20.0
+            heavy_comp      = comp[:, heavy_elem_mask]
+            heavy_total     = heavy_comp.sum(axis=1)
+            heavy_frac_body = heavy_total / totals.flatten()
+            has_core        = heavy_frac_body > 0.20
+
+            if has_core.any():
+                heavy_cpk        = elem_cpk[heavy_elem_mask]
+                heavy_totals_b   = np.maximum(heavy_total[:, None], 1e-12)
+                heavy_fractions  = heavy_comp / heavy_totals_b
+                core_colors_body = (heavy_fractions @ heavy_cpk).astype(np.float32)
+
+                body_indices = np.where(body_mask)[0]
+                core_indices = body_indices[has_core]
+                core_visible[core_indices] = True
+                core_colors[core_indices]  = core_colors_body[has_core]
+                core_frac[core_indices]    = heavy_frac_body[has_core].astype(np.float32)
 
         self.markers.set_data(
             pos=pos,
@@ -545,6 +583,24 @@ class Viewer:
         self.markers_nebula.set_data(
             pos=pos, face_color=outer_rgba, size=outer_size, edge_width=0,
         )
+
+        # --- Dense core layer (Phase 3 differentiation) -------------------
+        if core_visible.any():
+            # Core is rendered at ~50% of body size, opaque, in the heavy
+            # constituents' colour — visible "centre" of the body.
+            core_size = (sizes * 0.55).astype(np.float32)
+            core_rgba = np.zeros((n, 4), dtype=np.float32)
+            core_rgba[:, :3] = core_colors
+            core_rgba[:,  3] = np.where(core_visible, 1.0, 0.0).astype(np.float32)
+            self.markers_core.set_data(
+                pos=pos, face_color=core_rgba, size=core_size, edge_width=0,
+            )
+        else:
+            self.markers_core.set_data(
+                pos=np.zeros((1, 3), dtype=np.float32),
+                face_color=(0.0, 0.0, 0.0, 0.0),
+                size=1, edge_width=0,
+            )
 
         # --- Atmosphere halo (Phase 3) -----------------------------------
         # Gas envelope around bodies that have absorbed substantial light

@@ -26,7 +26,7 @@ rather than accrete into rocky bodies.
 from __future__ import annotations
 import numpy as np
 
-from sim import physics, chemistry, accretion, reactions
+from sim import physics, chemistry, accretion, reactions, outgassing
 from sim.elements import (
     ELEMENTS_LIST, SYMBOL_TO_ID, Element, IONIZATION_ENERGIES_EV,
 )
@@ -70,6 +70,7 @@ class World:
         self.total_bonds_formed:    int = 0
         self.total_accretions:      int = 0
         self.total_reactions:       int = 0     # Phase-4 chemical bond swaps
+        self.total_outgassing:      int = 0     # atoms released from hot bodies
         self.total_velocity_clamps: int = 0    # diagnostics: each clamp breaks momentum conservation
 
         # Deferred injection accumulator (fractional particles)
@@ -261,6 +262,9 @@ class World:
 
         # 9. Accretion: heavy inert particles merge into bodies
         accretion.update(self)
+
+        # 10. Outgassing: hot bodies release light elements (H, He) back as gas
+        outgassing.update(self)
 
         self.time += dt
 

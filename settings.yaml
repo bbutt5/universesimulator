@@ -54,8 +54,19 @@ thermal:
   plasma_repulsion_factor: 2.0       # extra multiplier on thermal pressure for ion-ion pairs
 
 chemistry:
+  # The geometric factors below are derived from the Morse potential profile:
+  #   bond_formation_factor 1.4  ≈ separation at which attractive Morse force
+  #                                is 50% of its peak value (formation occurs
+  #                                where the force is meaningfully present)
+  #   bond_break_factor    2.8   ≈ separation where Morse force has dropped
+  #                                below 0.2% of peak (bond effectively broken)
+  # Both correspond to physical thresholds on the Morse curve given the
+  # default bond_spring_constant and typical D_e from Pauling.  The per-bond
+  # Morse 'a' parameter is computed at bond formation in sim/particle.py:Bond.
   bond_formation_factor: 1.4   # form bond when dist < factor * (rc_i + rc_j)
   bond_velocity_threshold: 60.0  # max relative speed to allow bonding (SU/s)
+                                 #   ≈ thermal motion that wouldn't immediately
+                                 #     dissociate the new Morse well
   bond_spring_constant: 0.8    # Morse well spring constant k (energy/SU²)
   # Bond dissociation energy uses Pauling's real formula
   #   D(A-B) = √(D_AA·D_BB) + 96·(χ_A−χ_B)²   [kJ/mol]
@@ -122,6 +133,20 @@ reactions:
   reaction_radius:          150.0    # SU — pairs within this distance considered
   activation_energy_scale:  200.0    # kJ/mol — Arrhenius-like rate scale
   heat_release_scale:         0.5    # ΔE [kJ/mol] → sim KE for the j-k kick
+
+outgassing:
+  # --------------------------------------------------------------------------
+  # Temperature-driven volatile release from hot accreted bodies. Each step,
+  # for each body whose effective surface temperature exceeds the threshold,
+  # a probabilistic ejection of one light atom (mass < light_element_mass_max)
+  # occurs. The ejected atom leaves the body's surface at the body's escape
+  # velocity v_esc = √(2 G M / R), conserving total mass and momentum.
+  # Models stellar winds (hot stars) and atmospheric Jeans escape (hot planets).
+  # Set rate_per_step = 0 to disable.
+  # --------------------------------------------------------------------------
+  rate_per_step:           0.01      # base probability per body per step
+  temperature_threshold_K: 3000.0    # surface T below which no outgassing
+  light_element_mass_max:  5.0       # max atomic mass to consider "volatile"
 
 accretion:
   # --------------------------------------------------------------------------
