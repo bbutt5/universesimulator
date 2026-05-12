@@ -129,6 +129,30 @@ def _form_bonds(world) -> None:
 
     ionized = world.ionized
 
+    # ---- Heterogeneous catalysis (Sabatier 1911 / Langmuir 1918) ---------
+    # Real reactions accelerate near solid surfaces because the surface
+    # offers adsorption sites that lower the activation barrier. Atoms
+    # close to a sufficiently-massive accreted body are allowed to form
+    # bonds at relative velocities up to ``catalysis_factor × v_thresh``
+    # — equivalent to a catalyst lowering the kinetic-energy floor for
+    # successful collision. ``catalysis_factor = 1`` recovers the
+    # uncatalysed case.
+    cat_factor = float(getattr(cfg, 'catalysis_factor', 1.0))
+    cat_radius = float(getattr(cfg, 'catalysis_radius', 0.0))
+    catalyst_positions: list[np.ndarray] = []
+    if cat_factor > 1.0 and cat_radius > 0.0:
+        # Identify "solid surface" particles: accreted bodies with substantial
+        # mass ratio (≥ the planet rendering threshold from cfg).  This is
+        # real physics — a sticky surface only exists if you have one.
+        rend_cfg = getattr(world.cfg, 'renderer', None)
+        planet_mass_threshold = float(getattr(rend_cfg, 'planet_mass_threshold', 1e9))
+        for idx in range(world.n):
+            elem_idx = ELEMENTS_LIST[world.elem_ids[idx]]
+            if elem_idx.mass <= 0:
+                continue
+            if world.masses[idx] / elem_idx.mass >= planet_mass_threshold:
+                catalyst_positions.append(world.positions[idx].copy())
+
     for i in range(world.n):
         elem_i = ELEMENTS_LIST[world.elem_ids[i]]
         if elem_i.max_bonds == 0 or bond_counts[i] >= elem_i.max_bonds:
@@ -156,7 +180,17 @@ def _form_bonds(world) -> None:
                 continue
 
             rel_v = float(np.linalg.norm(vel[i] - vel[j]))
-            if rel_v > v_thresh:
+            # Catalysis: relax the velocity threshold if either atom is
+            # within catalysis_radius of a solid surface (accreted body).
+            effective_v_thresh = v_thresh
+            if catalyst_positions:
+                mid = 0.5 * (pos[i] + pos[j])
+                cat_radius_sq = cat_radius * cat_radius
+                for cp in catalyst_positions:
+                    if float(np.dot(mid - cp, mid - cp)) < cat_radius_sq:
+                        effective_v_thresh = v_thresh * cat_factor
+                        break
+            if rel_v > effective_v_thresh:
                 continue
 
             # Bond order: take as much as both atoms can support, up to triple.

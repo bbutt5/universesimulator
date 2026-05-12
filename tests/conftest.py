@@ -50,6 +50,8 @@ def cfg():
             'bond_spring_constant': 0.8,
             'bond_energy_scale': 0.184,   # sim energy per kJ/mol (H-H ≈ 80 sim energy)
             'bond_break_factor': 2.8,
+            'catalysis_factor':  1.0,   # OFF by default in tests
+            'catalysis_radius':  0.0,
             # Tiny Coulomb scale → barriers are trivially small → fusion easy
             # to trigger in tests. Production scale is 9600 (≈ MeV regime).
             'coulomb_barrier_scale': 1.0,

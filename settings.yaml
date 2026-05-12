@@ -65,6 +65,15 @@ chemistry:
   # so H-H bond depth ≈ old 80 sim-energy: scale = 80 / 436 ≈ 0.184.
   bond_energy_scale: 0.184
   bond_break_factor: 2.8       # break bond when dist > factor * equilibrium_length
+
+  # Heterogeneous catalysis (Sabatier 1911, Langmuir 1918) — bond formation
+  # is faster near solid surfaces because the surface offers adsorption sites
+  # that lower the activation barrier. Atoms within catalysis_radius of an
+  # accreted body (mass_ratio ≥ planet threshold) are allowed to bond at
+  # relative velocities up to catalysis_factor × bond_velocity_threshold.
+  # Set catalysis_factor to 1 to disable.
+  catalysis_factor: 2.0
+  catalysis_radius: 150.0
   # Nuclear fusion is gated by the classical Coulomb barrier:
   #   V_C = coulomb_barrier_scale · Z₁·Z₂ / (r₀·(A₁^⅓ + A₂^⅓))
   # where r₀ = 1.2 fm is the standard nuclear-radius constant (Krane 1988).
