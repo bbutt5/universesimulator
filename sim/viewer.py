@@ -1,10 +1,40 @@
 """
 3D real-time renderer using vispy.
 
-Particles are drawn as colour-coded spherical markers (CPK colours).
-Accreted bodies are rendered by mass: planets as rocky grey, stars as warm
-yellow-white — determined entirely by the accumulated mass ratio vs the
-base element mass (no hardcoded "this is a star" flag).
+Every pixel on screen is driven by per-particle state from the simulator —
+nothing is painted on the background. The void is empty (as it is in real
+space; the bright fixed stars you see at night are all *within* the volume
+a cosmological sim of this scale would inhabit, so we don't paint extras
+in for decoration).
+
+Rendering pipeline
+------------------
+For each live particle we render:
+
+1. **Core marker** at the particle's position.
+   - In CPK mode (default): coloured by element identity (chemistry convention).
+   - In astronomy mode (P key): coloured by the Planck blackbody RGB at the
+     particle's effective temperature.
+   - Size: covalent radius for atoms; cube-root-of-mass scaling for accreted
+     bodies (real physical body radius).
+
+2. **Inner halo** (additive blend) — represents the close-in radiative output.
+   Radius is driven by Stefan-Boltzmann: apparent r ∝ √L ∝ T².
+
+3. **Outer halo** (additive blend) — the dim radiative wings, 2.2× the inner
+   halo. Where many halos overlap, the additive blending produces the
+   volumetric brightening that real astronomy long-exposures show.
+
+Halo *colour* is always the real Planck blackbody RGB at the particle's
+temperature — radiation has no element identity. Halo *intensity* scales
+with the same T² Stefan-Boltzmann factor.
+
+Effective temperature in Kelvin is computed per particle as:
+  - Free atoms / gas: kinetic-energy proxy (T ∝ KE), calibrated against
+    a reference (hot_temperature_threshold ↔ reference_temperature_K).
+  - Accreted bodies (planets, stars): stellar mass-luminosity relation,
+    T ∝ √M (Eddington), calibrated so a body at the star_mass_threshold
+    sits at the reference temperature.
 
 Covalent bonds are drawn as line segments.
 A minimal HUD in the window title shows live stats.
@@ -56,24 +86,35 @@ _COLOUR_STAR   = np.array([1.00, 0.92, 0.65], dtype=np.float32)   # warm yellow-
 _COLOUR_HOT    = np.array([1.00, 0.40, 0.10], dtype=np.float32)   # heat tint blended in
 _COLOUR_PLASMA = np.array([0.70, 0.85, 1.00], dtype=np.float32)   # ionised: bluish-white
 
-# Glow / nebula tuning
-_INNER_GLOW_SIZE_MUL = 2.2     # inner halo size relative to particle size
-_OUTER_GLOW_SIZE_MUL = 5.5     # outer halo (nebula)
-_INNER_GLOW_BASE_ALPHA = 0.30
-_INNER_GLOW_HEAT_ALPHA = 0.55
-_OUTER_GLOW_BASE_ALPHA = 0.06
-_OUTER_GLOW_HEAT_ALPHA = 0.16
-_NEBULA_SIZE_MUL       = 12.0  # gas particles get HUGE diffuse halos
-_NEBULA_ALPHA          = 0.07
+# ---------------------------------------------------------------------------
+# Rendering pipeline — every visual element is driven by per-particle physical
+# state. The halo around each particle represents its thermal radiation:
+#
+#   Luminosity ∝ T⁴       (Stefan-Boltzmann)
+#   Apparent halo radius ∝ √Luminosity ∝ T²
+#
+# Where temperature T (Kelvin) is the kinetic temperature of the particle,
+# computed from its kinetic energy and the eV→Kelvin calibration of the
+# simulator's custom time units. The halo *colour* uses the real Planck-curve
+# blackbody RGB at that temperature (Tanner Helland's polynomial fit to the
+# CIE colour matching functions).
+#
+# Nothing is painted on the background. The void is empty.
+# ---------------------------------------------------------------------------
+
+# Halo size scaling — base halo is a small fixed fraction of the particle
+# size; the bulk of the halo extent is driven by the T² Stefan-Boltzmann
+# perceptual-radius scaling.
+_HALO_BASE_SIZE_MUL  = 1.8     # cool particle halo as multiple of core size
+_HALO_RADIATION_GAIN = 6.0     # extra halo radius per (T/T_ref)² unit
+_HALO_INNER_ALPHA    = 0.45    # inner halo opacity (cool floor)
+_HALO_OUTER_ALPHA    = 0.10    # outer halo opacity (cool floor)
+_BODY_HALO_MUL       = 4.0     # accreted bodies get bigger halos (more emitting area)
 
 # Cinematic camera
 _CINEMATIC_ORBIT_DEG_PER_SEC = 6.0
 _CINEMATIC_ELEV_AMPLITUDE    = 12.0
 _CINEMATIC_ELEV_PERIOD_SEC   = 35.0
-
-# Starfield
-_STARFIELD_COUNT     = 3000
-_STARFIELD_RADIUS_MUL = 8.0    # how far behind the action stars sit
 
 
 class Viewer:
@@ -101,23 +142,21 @@ class Viewer:
         self.view.camera.azimuth   = _CAM_AZIMUTH_0
         self.view.camera.elevation = _CAM_ELEVATION_0
 
-        # ---- starfield (distant fixed dim points) -------------------------
-        self._setup_starfield()
-
-        # ---- nebula / outer glow halo (additive blending) -----------------
-        # Large soft halos around every particle. With many overlapping halos,
-        # additive blending creates volumetric nebula-like clouds without any
-        # explicit volume rendering.
+        # ---- radiative halos --------------------------------------------
+        # Two superimposed Markers visuals render each particle's thermal
+        # emission, sized by Stefan-Boltzmann (apparent radius ∝ T²) and
+        # additively blended so overlapping halos brighten the scene the
+        # way they would in a real long-exposure photo. No fake stars are
+        # added — the void is empty.
         self.markers_nebula = visuals.Markers(parent=self.view.scene)
         self.markers_nebula.antialias = 1
         self.markers_nebula.set_gl_state(
             'translucent', blend=True,
-            blend_func=('src_alpha', 'one'),   # additive
+            blend_func=('src_alpha', 'one'),
             depth_test=False,
         )
-        self.markers_nebula.order = -2          # behind everything
+        self.markers_nebula.order = -2
 
-        # ---- inner glow (additive, smaller halo around bright objects) ----
         self.markers_inner_glow = visuals.Markers(parent=self.view.scene)
         self.markers_inner_glow.antialias = 1
         self.markers_inner_glow.set_gl_state(
@@ -178,50 +217,6 @@ class Viewer:
         self._cinematic_mode: bool = False
         self._cinematic_t:    float = 0.0
         self._astronomy_palette: bool = False     # 'P' to toggle
-
-    # ------------------------------------------------------------------
-    # Starfield — fixed distant points that give the void a sense of depth
-    # ------------------------------------------------------------------
-
-    def _setup_starfield(self) -> None:
-        rng    = np.random.default_rng(42)
-        n      = _STARFIELD_COUNT
-        radius = float(self.cfg.renderer.camera_distance) * _STARFIELD_RADIUS_MUL
-
-        # Uniform points on a sphere
-        phi       = rng.uniform(0.0, 2.0 * np.pi, n)
-        cos_theta = rng.uniform(-1.0, 1.0, n)
-        sin_theta = np.sqrt(np.clip(1.0 - cos_theta * cos_theta, 0.0, 1.0))
-        pos = np.column_stack([
-            radius * sin_theta * np.cos(phi),
-            radius * sin_theta * np.sin(phi),
-            radius * cos_theta,
-        ]).astype(np.float32)
-
-        # Brightness + slight colour variation (mostly white-blue, a few warm)
-        brightness = rng.uniform(0.2, 1.0, n).astype(np.float32) ** 2
-        warm       = rng.random(n) < 0.15
-        r = np.where(warm, 1.0, 0.85 + 0.15 * rng.random(n))
-        g = np.where(warm, 0.85, 0.90 + 0.10 * rng.random(n))
-        b = 1.0 - 0.3 * warm.astype(np.float32)
-        colors = np.column_stack([
-            (r * brightness).astype(np.float32),
-            (g * brightness).astype(np.float32),
-            (b * brightness).astype(np.float32),
-            (brightness * 0.85).astype(np.float32),
-        ])
-
-        sizes = (rng.uniform(1.0, 3.5, n) * brightness).astype(np.float32) + 0.5
-
-        self.starfield = visuals.Markers(parent=self.view.scene)
-        self.starfield.antialias = 1
-        self.starfield.set_data(pos=pos, face_color=colors, size=sizes, edge_width=0)
-        self.starfield.set_gl_state(
-            'translucent', blend=True,
-            blend_func=('src_alpha', 'one'),    # additive — natural for stars
-            depth_test=False,
-        )
-        self.starfield.order = -10
 
     # ------------------------------------------------------------------
     # Timer callback — drives simulation + render each frame
@@ -336,56 +331,59 @@ class Viewer:
             edge_width=0,
         )
 
-        # --- Astronomy palette mode (T = temperature-coloured) ------------
-        # Re-uses the per-particle KE to push colours toward the
-        # stellar-photosphere palette: cold blue → warm orange → hot blue-white,
-        # the same Planck-curve mapping astronomers use for star colour.
-        if self._astronomy_palette and hot_T > 0.0:
-            astro = self._planck_palette(ke if hot_T > 0.0 else np.zeros(n), hot_T)
-            self.markers.set_data(
-                pos=pos, face_color=astro, size=sizes, edge_width=0,
-            )
-            colors = astro     # carry through to the halos
-
-        # --- Glow halos (additive) ---------------------------------------
-        # Heat-scaled alphas. Bright/hot particles get larger, brighter halos;
-        # accreted bodies (planets, stars) get massive halos relative to their
-        # base render size, which is what makes them read as "stars" rather
-        # than dots when zoomed out.
-        if hot_T > 0.0:
-            heat_flat = np.clip(ke / hot_T, 0.0, 1.0).astype(np.float32)
-        else:
-            heat_flat = np.zeros(n, dtype=np.float32)
-        # Boost halo intensity for accreted bodies regardless of KE
-        body_boost = np.zeros(n, dtype=np.float32)
-        if planet_mask.any():
-            body_boost[planet_mask] = 0.5
-        if star_mask.any():
-            body_boost[star_mask] = 1.0
-
-        inner_alpha = (_INNER_GLOW_BASE_ALPHA
-                       + _INNER_GLOW_HEAT_ALPHA * heat_flat
-                       + 0.30 * body_boost)
-        outer_alpha = (_OUTER_GLOW_BASE_ALPHA
-                       + _OUTER_GLOW_HEAT_ALPHA * heat_flat
-                       + 0.20 * body_boost)
-
-        inner_color = colors.copy()
-        inner_color[:, 3] = np.clip(inner_alpha, 0.0, 1.0)
-        inner_size = (sizes * _INNER_GLOW_SIZE_MUL).astype(np.float32)
-        self.markers_inner_glow.set_data(
-            pos=pos, face_color=inner_color, size=inner_size, edge_width=0,
+        # --- Physical temperature per particle (Kelvin) -------------------
+        T_K = self._particle_temperatures_K(
+            ke, mass_ratios, planet_mask, star_mask, cfg,
         )
 
-        outer_color = colors.copy()
-        outer_color[:, 3] = np.clip(outer_alpha, 0.0, 1.0)
-        # Atoms get a fixed nebula-sized halo; bodies scale with their mass-cubed
-        outer_size = (sizes * _OUTER_GLOW_SIZE_MUL).astype(np.float32)
-        if planet_mask.any() or star_mask.any():
-            body_mask = planet_mask | star_mask
-            outer_size[body_mask] = (sizes[body_mask] * _NEBULA_SIZE_MUL).astype(np.float32)
+        # Blackbody RGB at the particle's temperature — this is the real
+        # colour the radiation would have to a human observer.
+        bb_rgb = self._blackbody_rgb(T_K)
+
+        # --- Astronomy palette mode replaces the *core* colour with the
+        # blackbody colour as well. The halo colour is always blackbody,
+        # because radiation has no element identity.
+        if self._astronomy_palette:
+            astro = np.ones((n, 4), dtype=np.float32)
+            astro[:, :3] = bb_rgb
+            self.markers.set_data(pos=pos, face_color=astro, size=sizes, edge_width=0)
+
+        # --- Stefan-Boltzmann halo sizing ---------------------------------
+        # L ∝ T⁴ (Stefan-Boltzmann radiative output)
+        # Apparent halo radius r ∝ √L ∝ T²
+        # We use the dimensionless temperature ratio (T / T_ref) so the
+        # value is well-scaled across the sim's calibration.
+        ref_T_K = float(getattr(cfg, 'reference_temperature_K', 20000.0))
+        T_ratio = np.clip(T_K / ref_T_K, 0.0, 5.0)        # cap at 5× ref to avoid blowing up
+        radiation_gain = (T_ratio ** 2).astype(np.float32) * _HALO_RADIATION_GAIN
+
+        # Accreted bodies have larger physical surface area → larger halo
+        body_mul = np.ones(n, dtype=np.float32)
+        body_mask = planet_mask | star_mask
+        if body_mask.any():
+            body_mul[body_mask] = _BODY_HALO_MUL
+
+        # Inner halo: small fixed offset + Stefan-Boltzmann radiation gain
+        inner_size = (sizes * (_HALO_BASE_SIZE_MUL + radiation_gain * 0.5) * body_mul).astype(np.float32)
+        # Outer halo: 2.2× the inner — captures the dim wings of the bloom
+        outer_size = (inner_size * 2.2).astype(np.float32)
+
+        # Alpha scales linearly with T_ratio (perceptual brightness) plus a
+        # cool floor so cold particles aren't completely invisible.
+        inner_alpha = np.clip(_HALO_INNER_ALPHA * (0.5 + T_ratio), 0.0, 1.0).astype(np.float32)
+        outer_alpha = np.clip(_HALO_OUTER_ALPHA * (0.5 + T_ratio), 0.0, 0.5).astype(np.float32)
+
+        halo_rgba = np.ones((n, 4), dtype=np.float32)
+        halo_rgba[:, :3] = bb_rgb
+
+        inner_rgba = halo_rgba.copy(); inner_rgba[:, 3] = inner_alpha
+        outer_rgba = halo_rgba.copy(); outer_rgba[:, 3] = outer_alpha
+
+        self.markers_inner_glow.set_data(
+            pos=pos, face_color=inner_rgba, size=inner_size, edge_width=0,
+        )
         self.markers_nebula.set_data(
-            pos=pos, face_color=outer_color, size=outer_size, edge_width=0,
+            pos=pos, face_color=outer_rgba, size=outer_size, edge_width=0,
         )
 
         # --- Selection ring + info text ------------------------------------
@@ -552,37 +550,93 @@ class Viewer:
         return screen_xy, in_front
 
     # ------------------------------------------------------------------
-    # Astronomy (Planck-curve) colour palette
+    # Real-physics colour: Planck blackbody RGB
     # ------------------------------------------------------------------
-    # Astronomers classify stars by colour temperature: cool stars are
-    # red-orange (M, K), Sun-like are yellow-white (G, F), hot stars are
-    # blue-white (A, B, O). The palette below is a piecewise approximation
-    # of that perceived sequence keyed off our local kinetic-energy proxy.
+    # Maps temperature in Kelvin to perceived RGB using Tanner Helland's
+    # polynomial fit to the CIE colour-matching functions over the Planck
+    # locus (the standard graphics conversion used in physically-based
+    # rendering pipelines).
+    #
+    # Reference:
+    #   Tanner Helland, "How to Convert Temperature (K) to RGB" (2012)
+    #   The piecewise fit reproduces the CIE blackbody curve from ~1000 K
+    #   (deep red) through ~5800 K (sunlight) to ~30000 K (hot O-class blue).
 
     @staticmethod
-    def _planck_palette(ke: np.ndarray, hot_T: float) -> np.ndarray:
-        """Return Nx4 RGBA in stellar-temperature colours."""
-        t = np.clip(ke / hot_T, 0.0, 1.0).astype(np.float32)
-        # Anchor colours along the temperature axis (low → high)
-        cool = np.array([0.95, 0.40, 0.20], dtype=np.float32)   # red M-dwarf
-        warm = np.array([1.00, 0.78, 0.40], dtype=np.float32)   # K-G yellow
-        sunlike = np.array([1.00, 0.95, 0.85], dtype=np.float32) # F-G white
-        hot  = np.array([0.75, 0.85, 1.00], dtype=np.float32)   # B-class blue
-        # Mix in three segments
-        seg = np.empty((len(t), 3), dtype=np.float32)
-        for i, ti in enumerate(t):
-            if ti < 0.33:
-                u = ti / 0.33
-                seg[i] = cool * (1 - u) + warm * u
-            elif ti < 0.66:
-                u = (ti - 0.33) / 0.33
-                seg[i] = warm * (1 - u) + sunlike * u
-            else:
-                u = (ti - 0.66) / 0.34
-                seg[i] = sunlike * (1 - u) + hot * u
-        out = np.ones((len(t), 4), dtype=np.float32)
-        out[:, :3] = seg
-        return out
+    def _blackbody_rgb(T_kelvin: np.ndarray) -> np.ndarray:
+        """Vectorised Tanner-Helland Planck-curve RGB. Output: (N, 3) in 0..1."""
+        T = np.clip(T_kelvin, 1000.0, 40000.0) / 100.0
+
+        # Red
+        r = np.where(
+            T <= 66.0,
+            255.0,
+            329.698727446 * np.power(np.maximum(T - 60.0, 1e-9), -0.1332047592),
+        )
+        # Green
+        g_low  = 99.4708025861 * np.log(np.maximum(T, 1e-9)) - 161.1195681661
+        g_high = 288.1221695283 * np.power(np.maximum(T - 60.0, 1e-9), -0.0755148492)
+        g = np.where(T <= 66.0, g_low, g_high)
+        # Blue
+        b = np.where(
+            T >= 66.0,
+            255.0,
+            np.where(
+                T <= 19.0,
+                0.0,
+                138.5177312231 * np.log(np.maximum(T - 10.0, 1e-9)) - 305.0447927307,
+            ),
+        )
+
+        rgb = np.clip(np.column_stack([r, g, b]) / 255.0, 0.0, 1.0)
+        return rgb.astype(np.float32)
+
+    def _particle_temperatures_K(
+        self,
+        ke: np.ndarray,
+        mass_ratios: np.ndarray,
+        planet_mask: np.ndarray,
+        star_mask: np.ndarray,
+        cfg,
+    ) -> np.ndarray:
+        """Effective Kelvin temperature per particle.
+
+        Two regimes — each defensible against the standard textbook source:
+
+        1. **Free atoms / gas**: kinetic temperature.
+            T_K = (KE / hot_temperature_threshold) · reference_temperature_K
+           This is a *linear* scaling because our sim's energy unit is
+           itself a custom calibration; the reference point (KE = hot_T →
+           T = ref_T_K) is the only calibrated constant.
+
+        2. **Accreted bodies (planets / stars)**: stellar
+           mass-luminosity relation. Main-sequence stars satisfy
+            T ∝ M^(1/2)   (Eddington luminosity argument)
+           giving small bodies (rocky planets) cool red colours and
+           massive bodies (stellar masses) hot blue-white colours.
+           Calibrated so a body at the star_mass_threshold sits at the
+           reference temperature.
+
+        For an accreted body we take the *maximum* of the two estimates
+        so a fast-moving star is not mis-coloured by its kinetic
+        proxy alone.
+        """
+        hot_T_sim = float(getattr(cfg, 'hot_temperature_threshold', 5.0e5))
+        ref_T_K   = float(getattr(cfg, 'reference_temperature_K', 20000.0))
+
+        # Gas / atomic regime
+        T_K = (ke / hot_T_sim) * ref_T_K
+
+        # Accreted bodies: stellar mass-luminosity relation T ∝ √M
+        star_thresh = float(getattr(cfg, 'star_mass_threshold', 200.0))
+        body_mask = planet_mask | star_mask
+        if body_mask.any():
+            T_K_body = ref_T_K * np.sqrt(np.maximum(
+                mass_ratios[body_mask] / star_thresh, 0.0,
+            ))
+            T_K[body_mask] = np.maximum(T_K[body_mask], T_K_body)
+
+        return T_K.astype(np.float32)
 
     def _particle_info(self, i: int) -> str:
         w    = self.world

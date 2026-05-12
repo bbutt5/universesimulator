@@ -156,3 +156,9 @@ renderer:
 
   # KE at which colour blends fully to "hot" (orange-red). 0 disables the tint.
   hot_temperature_threshold: 500000.0
+
+  # Renderer calibration: when a particle's KE equals hot_temperature_threshold,
+  # its effective physical temperature is taken to be this many Kelvin. The
+  # blackbody-RGB function and Stefan-Boltzmann halo sizing use this mapping;
+  # the value here corresponds to a hot B-class star photosphere.
+  reference_temperature_K: 20000.0

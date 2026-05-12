@@ -24,7 +24,7 @@ The simulator surfaces conservation-law diagnostics in its HUD (total energy + d
 - **Conservation diagnostics** — total KE + PE in the HUD with drift % since t=0 (velocity-Verlet is symplectic, so non-zero drift means dt is too large or softening is too small). Velocity-clamp counter exposes how often the numerical max-speed band-aid fires.
 - **Cosmological initial conditions** — Hubble expansion velocity and primordial density seeds; angular momentum from tidal torques, no hardcoded rotation.
 - **Real periodic table** — masses from AME 2020 (dominant isotope), covalent radii from Cordero 2008, electronegativities from Pauling, bond energies from CRC Handbook, ionisation energies from NIST ASD. Every value cited in `sim/elements.py`.
-- **3D vispy renderer** — CPK-coloured particles, bond lines, click-to-inspect, live HUD, interactive camera
+- **3D vispy renderer with real radiative output** — every halo is driven by per-particle Stefan-Boltzmann luminosity (radius ∝ T²) and rendered in real Planck-blackbody RGB (Tanner Helland's CIE fit). Press `P` to switch the core colour from CPK chemistry convention to the same physical blackbody. Effective temperatures come from kinetic energy (gas) and the stellar mass-luminosity relation T ∝ √M (accreted bodies). No starfield, no painted backdrop — the void is empty, as it should be.
 
 ## Requirements
 
